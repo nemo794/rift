@@ -1,0 +1,66 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "biomass-geocode"
+version = "0.1.0"
+description = "Geocode ESA BIOMASS L1A SCS granules to a master grid over Antarctica"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+    {name = "Your Name", email = "your.email@example.com"},
+]
+keywords = ["BIOMASS", "SAR", "geocoding", "Antarctica", "ISCE3", "remote sensing"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: GIS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+]
+
+dependencies = [
+    "numpy>=1.25",
+    "rasterio>=1.4",
+    "scipy",
+    "lxml",
+    "python-dateutil",
+    "requests",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov",
+    "black",
+    "flake8",
+    "mypy",
+]
+
+[project.urls]
+Homepage = "https://github.com/yourusername/biomass-geocode"
+Documentation = "https://github.com/yourusername/biomass-geocode/tree/main/docs"
+Repository = "https://github.com/yourusername/biomass-geocode"
+Issues = "https://github.com/yourusername/biomass-geocode/issues"
+
+[project.scripts]
+geocode-biomass = "src.geocode_biomass_custom_grid:main"
+compute-biomass-geogrid = "src.compute_biomass_geogrid:main"
+validate-grid-alignment = "src.validate_grid_alignment:main"
+
+[tool.setuptools]
+packages = ["src"]
+
+[tool.setuptools.package-data]
+src = ["*.py"]
+
+[tool.black]
+line-length = 100
+target-version = ['py311']
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]

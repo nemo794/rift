@@ -1,0 +1,65 @@
+name: biomass_processing
+channels:
+  - conda-forge
+dependencies:
+  # Python version
+  - python=3.11
+
+  # Core SAR processing
+  - isce3>=0.25          # InSAR Scientific Computing Environment (geocoding engine)
+  - gdal>=3.8            # Geospatial Data Abstraction Library
+  - libgdal-netcdf       # GDAL NetCDF driver (for ionosphere LUT files)
+
+  # Geospatial libraries
+  - rasterio>=1.4        # Python interface to GDAL for raster I/O
+  - shapely>=2.0         # Geometric operations
+  - affine                # Affine transformations for georeferencing
+
+  # Scientific computing
+  - numpy>=1.25          # Array operations
+  - scipy                # Scientific computing (dependency of isce3)
+
+  # Data formats
+  - lxml                 # XML parsing (BIOMASS annotation files)
+  - netcdf4              # NetCDF support (ionosphere LUT files)
+  - xarray               # N-dimensional labeled arrays (ionosphere processing)
+
+  # Utilities
+  - python-dateutil      # Date/time utilities
+  - requests             # HTTP library (for downloading)
+
+  # pip packages (not available on conda-forge or require pip install)
+  - pip
+  - pip:
+      - sardem>=0.13     # DEM downloading (supports NISAR DEM source)
+      # biomass-reader installed separately from GitHub with:
+      #   git clone https://github.com/scottstanie/biomass-reader.git
+      #   pip install -e './biomass-reader[ionosphere]'
+
+# Platform support
+platforms:
+  - osx-arm64            # Apple Silicon
+  - osx-64               # Intel Mac
+  - linux-64             # Linux
+
+# Installation instructions:
+# ==========================
+# 1. Create environment:
+#    conda env create -f environment.yaml
+#    conda activate biomass_processing
+#
+# 2. Install biomass-reader (required, not on conda):
+#    git clone https://github.com/scottstanie/biomass-reader.git
+#    cd biomass-reader
+#    pip install -e '.[ionosphere]'
+#
+# 3. Test installation:
+#    python tests/test_grid_system.py
+#
+# Key package purposes:
+# ---------------------
+# isce3: Performs the actual radar-to-map geocoding using orbit, DEM, and Doppler
+# gdal/rasterio: Read/write GeoTIFF files, coordinate transformations
+# biomass-reader: Parses BIOMASS L1A products into isce3 objects (RadarGrid, Orbit, Doppler)
+# sardem: Downloads DEMs from various sources (we use NISAR DEM for Antarctica)
+# netcdf4/xarray: Process ionosphere correction LUT files (optional)
