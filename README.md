@@ -1,4 +1,4 @@
-# biomass-geocode
+# rift
 
 **BIOMASS Geocoding Toolkit for Antarctic Applications**
 
@@ -21,7 +21,7 @@ See [INSTALL.md](INSTALL.md) for detailed installation instructions.
 ```bash
 # Create conda environment
 conda env create -f environment.yaml
-conda activate biomass-geocode
+conda activate rift
 
 # Install package
 pip install -e .
@@ -58,7 +58,7 @@ python src/geocode_biomass_custom_grid.py \
 ## Repository Structure
 
 ```
-biomass-geocode/
+rift/
 ├── README.md                           # This file
 ├── INSTALL.md                          # Detailed installation instructions
 ├── pyproject.toml                      # Python package configuration

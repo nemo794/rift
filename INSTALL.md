@@ -11,8 +11,8 @@
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/yourusername/biomass-geocode.git
-cd biomass-geocode
+git clone https://github.com/yourusername/rift.git
+cd rift
 ```
 
 ### 2. Create Conda Environment
@@ -131,7 +131,7 @@ If Python can't find the `biomass_reader` module:
 To update the package:
 
 ```bash
-cd biomass-geocode
+cd rift
 git pull
 
 # Update conda environment if dependencies changed

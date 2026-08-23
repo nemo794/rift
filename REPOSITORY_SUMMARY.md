@@ -2,12 +2,12 @@
 
 ## Overview
 
-The `biomass-geocode` repository is now ready for GitHub! This repository provides tools to geocode ESA BIOMASS L1A SCS granules to a master grid over Antarctica, producing Cloud-Optimized GeoTIFFs with perfectly aligned 512×512 pixel chunks.
+The `rift` repository is now ready for GitHub! This repository provides tools to geocode ESA BIOMASS L1A SCS granules to a master grid over Antarctica, producing Cloud-Optimized GeoTIFFs with perfectly aligned 512×512 pixel chunks.
 
 ## Repository Structure
 
 ```
-biomass-geocode/
+rift/
 ├── README.md                      # Main documentation with quick start
 ├── INSTALL.md                     # Detailed installation instructions
 ├── pyproject.toml                 # Python package configuration
@@ -136,7 +136,7 @@ Edit these files to replace placeholder text:
 
 **pyproject.toml:**
 - Line 9: `authors = [{name = "Your Name", email = "your.email@example.com"}]`
-- Line 20: `Homepage = "https://github.com/yourusername/biomass-geocode"`
+- Line 20: `Homepage = "https://github.com/yourusername/rift"`
 - Lines 21-23: Update URLs with your GitHub username
 
 **README.md:**
@@ -146,7 +146,7 @@ Edit these files to replace placeholder text:
 ### 2. Initialize Git Repository
 
 ```bash
-cd biomass-geocode
+cd rift
 git init
 git add .
 git commit -m "Initial commit: BIOMASS geocoding tools for Antarctica"
@@ -155,7 +155,7 @@ git commit -m "Initial commit: BIOMASS geocoding tools for Antarctica"
 ### 3. Create GitHub Repository
 
 1. Go to https://github.com/new
-2. Repository name: `biomass-geocode`
+2. Repository name: `rift`
 3. Description: "Geocode ESA BIOMASS L1A SCS granules to a master grid over Antarctica"
 4. Public or Private (your choice)
 5. Do NOT initialize with README (we already have one)
@@ -163,7 +163,7 @@ git commit -m "Initial commit: BIOMASS geocoding tools for Antarctica"
 ### 4. Push to GitHub
 
 ```bash
-git remote add origin https://github.com/yourusername/biomass-geocode.git
+git remote add origin https://github.com/yourusername/rift.git
 git branch -M main
 git push -u origin main
 ```
