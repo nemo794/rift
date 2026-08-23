@@ -9,15 +9,22 @@ aligned 512×512 chunks.
 
 The master grid uses:
 - EPSG:3031 (Antarctic Polar Stereographic)
-- Pixel spacing: 5m × 40m
-- COG chunk size: 512×512 pixels = 2,560m × 20,480m real-world tiles
+- Pixel spacing: parameterized; default 5m × 5m (shared BIOMASS/NISAR grid — see
+  docs/GRID_RESAMPLING_DECISION.md). Chunk real-world size derives from spacing.
+- COG chunk size: 512×512 pixels
 - Origin: (0, 0) at South Pole
 - Extent: ±3,072,000 m (covers entire Antarctic continent)
+
+The default spacing is 5×5 so BIOMASS and NISAR products co-register at the chunk
+level. Build a non-default grid (e.g. BIOMASS-native 5×40) with
+``ANTARCTICA_GRID.with_spacing(x, y)`` or by constructing ``AntarcticaGrid`` directly.
 """
+
+from __future__ import annotations
 
 import sys
 from pathlib import Path
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Dict, Tuple
 import numpy as np
 
@@ -36,7 +43,7 @@ class AntarcticaGrid:
     # Projection and pixel spacing
     epsg: int = 3031
     x_posting: float = 5.0      # meters (azimuth direction)
-    y_posting: float = 40.0     # meters (range direction)
+    y_posting: float = 5.0      # meters (range direction); default 5×5 shared grid
 
     # COG chunk configuration
     chunk_pixels: int = 512     # 512×512 pixel chunks
@@ -80,6 +87,23 @@ class AntarcticaGrid:
     def n_chunks_y(self) -> int:
         """Total number of chunks in Y direction."""
         return self.height // self.chunk_pixels
+
+    def with_spacing(self, x_posting: float, y_posting: float) -> "AntarcticaGrid":
+        """
+        Return a new grid identical to this one but with different pixel spacing.
+
+        Because the grid is frozen (immutable), this is the supported way to build a
+        non-default grid (e.g. BIOMASS-native 5×40) from CLI flags while preserving the
+        origin, extent, EPSG, and chunk size.
+
+        Args:
+            x_posting: New X (azimuth) spacing in meters
+            y_posting: New Y (range) spacing in meters
+
+        Returns:
+            AntarcticaGrid: New instance with the requested spacing
+        """
+        return replace(self, x_posting=x_posting, y_posting=y_posting)
 
     def snap_coordinate(self, value: float, chunk_size: float, mode: str = 'floor') -> float:
         """
@@ -200,10 +224,10 @@ class AntarcticaGrid:
             snap_to_chunks: If True, snap to chunk boundaries (recommended)
 
         Returns:
-            dict: Geogrid parameters compatible with geocode_biomass_custom_grid.py
+            dict: Geogrid parameters compatible with rift.biomass.geocode
         """
-        # Import here to avoid circular dependency
-        from compute_biomass_geogrid import compute_biomass_footprint
+        # Import here to avoid circular dependency (biomass depends on grid)
+        from rift.biomass.geogrid import compute_biomass_footprint
 
         # Compute footprint
         bbox = compute_biomass_footprint(granule_path, polarization)

@@ -1,8 +1,14 @@
 # Antarctica Master Grid System
 
+> **Note — default spacing is now 5×5 m.** Pixel spacing is a parameter
+> (`x_posting`/`y_posting`); the default `ANTARCTICA_GRID` is **5×5 m** so BIOMASS and NISAR
+> co-register at the chunk level. Tables/examples below showing **5×40 m** (chunk_size_y =
+> 20,480 m) describe the **BIOMASS-native** grid, built via `ANTARCTICA_GRID.with_spacing(5, 40)`.
+> See [GRID_RESAMPLING_DECISION.md](GRID_RESAMPLING_DECISION.md).
+
 ## Overview
 
-The Antarctica master grid is a reference grid that ensures all geocoded BIOMASS granules produce Cloud-Optimized GeoTIFFs (COGs) with perfectly aligned 512×512 pixel chunks. This alignment is critical for efficient mosaicking, time-series analysis, and cloud-based data access.
+The Antarctica master grid is a reference grid that ensures all geocoded BIOMASS and NISAR granules produce Cloud-Optimized GeoTIFFs (COGs) with perfectly aligned 512×512 pixel chunks. This alignment is critical for efficient mosaicking, time-series analysis, and cloud-based data access.
 
 ## Master Grid Specification
 
@@ -133,7 +139,7 @@ bbox_with_margin = {
 Snap the extended bbox to master grid chunks:
 
 ```python
-from grid_utils import ANTARCTICA_GRID
+from rift.grid import ANTARCTICA_GRID
 
 snapped_bbox = ANTARCTICA_GRID.snap_bbox(bbox_with_margin, expand=True)
 ```
@@ -178,7 +184,7 @@ python src/geocode_biomass_custom_grid.py \
 Validate that a geogrid is properly aligned:
 
 ```python
-from grid_utils import ANTARCTICA_GRID
+from rift.grid import ANTARCTICA_GRID
 
 is_valid, message = ANTARCTICA_GRID.validate_geogrid(geogrid)
 if is_valid:

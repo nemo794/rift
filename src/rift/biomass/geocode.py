@@ -6,7 +6,7 @@ This script geocodes a BIOMASS L1A SCS granule to a user-specified geogrid,
 creating a Cloud-Optimized GeoTIFF with amplitude (and optionally phase).
 
 Usage:
-    python geocode_biomass_custom_grid.py \
+    python rift.biomass.geocode \
         --biomass-granule /path/to/BIOMASS/scene \
         --geogrid biomass_geogrid.json \
         --dem dem_epsg3031.tif \
@@ -15,7 +15,7 @@ Usage:
 
 Arguments:
     --biomass-granule:  BIOMASS L1A SCS granule directory or .zip file
-    --geogrid:          JSON file with geogrid parameters (from compute_biomass_geogrid.py)
+    --geogrid:          JSON file with geogrid parameters (from rift.biomass.geogrid)
     --dem:              DEM file in EPSG:3031
     --output:           Output COG file
     --polarization:     Polarization to process (HH, HV, VH, VV)
@@ -34,19 +34,105 @@ from datetime import datetime
 import re
 import zipfile
 
-import h5py
-import yaml
 import numpy as np
 import rasterio
-from rasterio.crs import CRS
 from rasterio.transform import Affine
-import subprocess
-
-# Add biomass-reader to path
-sys.path.insert(0, str(Path(__file__).parent / "biomass-reader" / "src"))
+from rasterio.warp import transform_bounds
+from rasterio.windows import from_bounds
 
 from biomass_reader import BiomassSlc
 import isce3
+
+from rift.cogutil import base_profile, write_cog
+from rift.biomass.geogrid import ensure_granule_dir
+
+
+class DemCoverageError(Exception):
+    """Raised when a provided DEM does not cover the output geocoded radar swath."""
+
+
+def check_dem_covers_grid(dem_file, grid_params, min_valid_fraction=0.0):
+    """
+    Fail early if a provided DEM does not cover the output geocoding grid.
+
+    Checks two things against the chunk-aligned output grid (which already includes the
+    swath margin): (1) the DEM's extent must fully contain the grid, and (2) the DEM must
+    actually hold valid elevation data over the grid — an extent that merely *overlaps* is
+    not enough, since a DEM cropped to a different swath can be all-nodata here.
+
+    The grid bbox (EPSG from ``grid_params``) is reprojected into the DEM's CRS, so a DEM
+    in EPSG:4326 (as returned by the sardem auto-download) is handled correctly.
+
+    Args:
+        dem_file: Path to the DEM raster
+        grid_params: Geogrid dict (x_min/x_max/y_min/y_max, epsg, width, height)
+        min_valid_fraction: Minimum fraction of sampled grid pixels that must be valid
+            (default 0.0 → require at least one valid pixel). Raise the threshold to also
+            reject DEMs that are mostly nodata over the swath.
+
+    Raises:
+        DemCoverageError: If the DEM does not spatially contain the grid or has no valid
+            data over it.
+    """
+    guidance = (
+        "Provided DEM does not cover the output geocoded radar swath. Either provide a "
+        "DEM that corresponds to the input granule, or omit the --dem option to let the "
+        "algorithm auto-fetch the correct DEM."
+    )
+
+    with rasterio.open(dem_file) as dem:
+        # Grid bbox in the grid's CRS, reprojected into the DEM's CRS for comparison.
+        grid_epsg = grid_params['epsg']
+        gx_min, gx_max = grid_params['x_min'], grid_params['x_max']
+        gy_min, gy_max = grid_params['y_min'], grid_params['y_max']
+
+        if dem.crs is None:
+            raise DemCoverageError(f"{guidance} (DEM has no CRS defined: {dem_file})")
+
+        dem_epsg = dem.crs.to_epsg()
+        if dem_epsg is not None and dem_epsg != grid_epsg:
+            left, bottom, right, top = transform_bounds(
+                f"EPSG:{grid_epsg}", dem.crs, gx_min, gy_min, gx_max, gy_max
+            )
+        else:
+            left, bottom, right, top = gx_min, gy_min, gx_max, gy_max
+
+        # (1) Extent containment (allow one pixel of tolerance on each edge).
+        db = dem.bounds
+        tol_x = abs(dem.transform.a)
+        tol_y = abs(dem.transform.e)
+        if (left < db.left - tol_x or right > db.right + tol_x or
+                bottom < db.bottom - tol_y or top > db.top + tol_y):
+            raise DemCoverageError(
+                f"{guidance}\n"
+                f"    Grid bbox (DEM CRS): [{left:.1f}, {bottom:.1f}, {right:.1f}, {top:.1f}]\n"
+                f"    DEM bounds:          [{db.left:.1f}, {db.bottom:.1f}, {db.right:.1f}, {db.top:.1f}]"
+            )
+
+        # (2) Valid-data check: read the grid region (decimated) and require valid pixels.
+        try:
+            window = from_bounds(left, bottom, right, top, dem.transform)
+            # Decimate to a bounded sample (~512 px per side) to keep this cheap.
+            out_h = min(512, max(1, int(round(window.height))))
+            out_w = min(512, max(1, int(round(window.width))))
+            sample = dem.read(1, window=window, out_shape=(out_h, out_w),
+                              boundless=True, fill_value=dem.nodata if dem.nodata is not None else np.nan)
+        except Exception as e:
+            raise DemCoverageError(f"{guidance} (failed to read DEM over grid: {e})")
+
+        finite = np.isfinite(sample)
+        if dem.nodata is not None:
+            finite &= (sample != dem.nodata)
+        valid_fraction = float(np.count_nonzero(finite)) / finite.size
+
+        if valid_fraction <= min_valid_fraction:
+            raise DemCoverageError(
+                f"{guidance}\n"
+                f"    DEM extent contains the grid, but only {valid_fraction:.1%} of the "
+                f"swath region has valid elevation data (nodata elsewhere)."
+            )
+
+    return True
 
 
 def load_geogrid_params(geogrid_file):
@@ -104,14 +190,13 @@ def geocode_biomass_granule(granule_path, dem_file, grid_params, polarization):
     print(f"\nProcessing: {granule_path.name}")
     print(f"Acquisition: {acq_time.strftime('%Y-%m-%d %H:%M:%S UTC')}")
 
-    # Unzip if needed
-    if granule_path.suffix == '.zip':
-        extract_dir = granule_path.parent / granule_path.stem
-        if not extract_dir.exists():
-            print(f"  Extracting {granule_path.name}...")
-            with zipfile.ZipFile(granule_path, 'r') as zip_ref:
-                zip_ref.extractall(granule_path.parent)
-        granule_path = extract_dir
+    # Fail early: verify the provided DEM covers the (margined, chunk-aligned) output grid
+    # before doing any expensive SLC loading or geocoding.
+    print(f"  Checking DEM coverage of output grid...")
+    check_dem_covers_grid(dem_file, grid_params)
+
+    # Unzip if needed (shared with footprint computation)
+    granule_path = ensure_granule_dir(granule_path)
 
     print(f"  Loading BIOMASS SLC...")
     slc = BiomassSlc.from_dir(granule_path, polarization=polarization)
@@ -179,7 +264,8 @@ def geocode_biomass_granule(granule_path, dem_file, grid_params, polarization):
     return output, acq_time
 
 
-def write_cog(output_file, complex_data, grid_params, acq_time, polarization, metadata, include_phase=False):
+def write_biomass_cog(output_file, complex_data, grid_params, acq_time, polarization,
+                      metadata, include_phase=False):
     """
     Write COG (amplitude only or amplitude + phase) from complex geocoded data.
 
@@ -187,100 +273,60 @@ def write_cog(output_file, complex_data, grid_params, acq_time, polarization, me
         Band 1: Amplitude (linear)
         Band 2: Phase (radians, -π to +π) [optional]
 
+    The temporary-GeoTIFF write and gdal_translate → COG conversion are delegated to
+    :mod:`rift.cogutil` so COG options stay consistent across all rift products.
+
     Args:
         include_phase: If True, write both amplitude and phase. If False, only amplitude.
     """
     num_bands = 2 if include_phase else 1
     band_desc = "amplitude + phase" if include_phase else "amplitude only"
-    print(f"\nWriting {num_bands}-band GeoTIFF ({band_desc}): {output_file}")
+    print(f"\nWriting {num_bands}-band COG ({band_desc}): {output_file}")
 
-    # Extract amplitude and phase
+    # Extract amplitude (phase discarded unless requested — amplitude is detected last)
     amplitude = np.abs(complex_data).astype(np.float32)
-    phase = np.angle(complex_data).astype(np.float32)
 
-    # Prepare metadata
-    height = grid_params['height']
-    width = grid_params['width']
-
-    # Create affine transform
+    # Create affine transform (north-up: negative y spacing)
     transform = Affine(
         grid_params['x_posting'], 0.0, grid_params['x_min'],
         0.0, -grid_params['y_posting'], grid_params['y_max']
     )
 
-    # Temporary file
-    temp_file = output_file.with_suffix('.temp.tif')
+    profile = base_profile(
+        width=grid_params['width'],
+        height=grid_params['height'],
+        epsg=grid_params['epsg'],
+        transform=transform,
+        dtype='float32',
+        count=num_bands,
+        nodata=np.nan,
+    )
 
-    # Write temporary GeoTIFF
-    num_bands = 2 if include_phase else 1
-    band_desc = "amplitude + phase" if include_phase else "amplitude"
-    print(f"  Writing {num_bands} band(s) ({band_desc}) to temporary file...")
-
-    profile = {
-        'driver': 'GTiff',
-        'dtype': 'float32',
-        'width': width,
-        'height': height,
-        'count': num_bands,
-        'crs': CRS.from_epsg(grid_params['epsg']),
-        'transform': transform,
-        'nodata': np.nan,
-        'tiled': True,
-        'blockxsize': 512,
-        'blockysize': 512,
-        'compress': 'DEFLATE',
-    }
-
-    with rasterio.open(temp_file, 'w', **profile) as dst:
-        # Write amplitude band
-        dst.write(amplitude, 1)
-        dst.set_band_description(1, f"BIOMASS {polarization} - Amplitude")
-        dst.update_tags(1, **{
+    bands = {
+        1: (amplitude, {
             'BAND_TYPE': 'amplitude',
             'ACQUISITION_TIME': acq_time.isoformat(),
             'POLARIZATION': polarization,
             'UNITS': 'linear amplitude',
+        }),
+    }
+    band_descriptions = {1: f"BIOMASS {polarization} - Amplitude"}
+
+    if include_phase:
+        phase = np.angle(complex_data).astype(np.float32)
+        bands[2] = (phase, {
+            'BAND_TYPE': 'phase',
+            'ACQUISITION_TIME': acq_time.isoformat(),
+            'POLARIZATION': polarization,
+            'UNITS': 'radians',
+            'RANGE': '-π to +π',
         })
+        band_descriptions[2] = f"BIOMASS {polarization} - Phase"
 
-        # Write phase band if requested
-        if include_phase:
-            dst.write(phase, 2)
-            dst.set_band_description(2, f"BIOMASS {polarization} - Phase")
-            dst.update_tags(2, **{
-                'BAND_TYPE': 'phase',
-                'ACQUISITION_TIME': acq_time.isoformat(),
-                'POLARIZATION': polarization,
-                'UNITS': 'radians',
-                'RANGE': '-π to +π',
-            })
-
-        # Global metadata
-        dst.update_tags(**metadata)
-
-    print(f"  Converting to Cloud-Optimized GeoTIFF...")
-    cmd = [
-        'gdal_translate',
-        str(temp_file),
-        str(output_file),
-        '-of', 'COG',
-        '-co', 'BLOCKSIZE=512',
-        '-co', 'COMPRESS=DEFLATE',
-        '-co', 'ZLEVEL=1',
-        '-co', 'PREDICTOR=3',
-        '-co', 'NUM_THREADS=ALL_CPUS',
-        '-co', 'BIGTIFF=YES',
-        '-co', 'OVERVIEW_RESAMPLING=AVERAGE',
-    ]
-
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        raise RuntimeError(f"gdal_translate failed: {result.stderr}")
-
-    # Remove temporary file
-    temp_file.unlink()
+    write_cog(output_file, bands, profile,
+              band_descriptions=band_descriptions, global_meta=metadata)
 
     print(f"\n✓ Created: {output_file}")
-    band_desc = "amplitude + phase" if include_phase else "amplitude only"
     print(f"  Bands: {num_bands} ({band_desc})")
     print(f"  Size: {output_file.stat().st_size / 1e6:.1f} MB")
 
@@ -350,7 +396,7 @@ def main():
         'PROCESSING': 'BIOMASS L1A SCS geocoded to custom grid using isce3',
     }
 
-    write_cog(
+    write_biomass_cog(
         args.output,
         complex_data,
         grid_params,

@@ -3,7 +3,7 @@
 Validate grid alignment across multiple BIOMASS geogrid files.
 
 This script verifies that multiple geogrid JSON files (produced by
-compute_biomass_geogrid.py) are properly aligned to the Antarctica master
+rift.biomass.geogrid) are properly aligned to the Antarctica master
 grid's chunk boundaries, ensuring all output COGs will have aligned chunks.
 
 Usage:
@@ -22,7 +22,7 @@ import json
 import sys
 from pathlib import Path
 from typing import List, Dict
-from grid_utils import ANTARCTICA_GRID
+from rift.grid import ANTARCTICA_GRID
 
 
 def load_geogrid(geogrid_file: Path) -> Dict:

@@ -5,13 +5,13 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "rift"
 version = "0.1.0"
-description = "Geocode ESA BIOMASS L1A SCS granules to a master grid over Antarctica"
+description = "Geocode ESA BIOMASS and reproject NISAR GSLC to a master grid over Antarctica, then run inference"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [
     {name = "Your Name", email = "your.email@example.com"},
 ]
-keywords = ["BIOMASS", "SAR", "geocoding", "Antarctica", "ISCE3", "remote sensing"]
+keywords = ["BIOMASS", "NISAR", "SAR", "geocoding", "Antarctica", "ISCE3", "remote sensing"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
@@ -24,9 +24,14 @@ dependencies = [
     "numpy>=1.25",
     "rasterio>=1.4",
     "scipy",
+    "h5py>=3.0",
     "lxml",
+    "pyproj",
+    "PyYAML",
     "python-dateutil",
     "requests",
+    "tqdm",
+    "jsonargparse>=4.27",
 ]
 
 [project.optional-dependencies]
@@ -45,15 +50,13 @@ Repository = "https://github.com/yourusername/rift"
 Issues = "https://github.com/yourusername/rift/issues"
 
 [project.scripts]
-geocode-biomass = "src.geocode_biomass_custom_grid:main"
-compute-biomass-geogrid = "src.compute_biomass_geogrid:main"
-validate-grid-alignment = "src.validate_grid_alignment:main"
+rift = "rift.cli:main"
 
 [tool.setuptools]
-packages = ["src"]
+package-dir = {"" = "src"}
 
-[tool.setuptools.package-data]
-src = ["*.py"]
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [tool.black]
 line-length = 100

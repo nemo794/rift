@@ -1,4 +1,4 @@
-name: biomass_processing
+name: rift
 channels:
   - conda-forge
 dependencies:
@@ -6,32 +6,37 @@ dependencies:
   - python=3.11
 
   # Core SAR processing
-  - isce3>=0.25          # InSAR Scientific Computing Environment (geocoding engine)
-  - gdal>=3.8            # Geospatial Data Abstraction Library
+  - isce3>=0.25          # InSAR Scientific Computing Environment (BIOMASS geocoding engine)
+  - gdal>=3.8            # Geospatial Data Abstraction Library (COG driver)
   - libgdal-netcdf       # GDAL NetCDF driver (for ionosphere LUT files)
 
   # Geospatial libraries
   - rasterio>=1.4        # Python interface to GDAL for raster I/O
   - shapely>=2.0         # Geometric operations
-  - affine                # Affine transformations for georeferencing
+  - affine               # Affine transformations for georeferencing
+  - pyproj               # CRS transforms (DEM bounds → EPSG:4326)
 
   # Scientific computing
   - numpy>=1.25          # Array operations
-  - scipy                # Scientific computing (dependency of isce3)
+  - scipy                # Anti-alias filtering / complex resampling (isce3 dep too)
 
   # Data formats
+  - h5py>=3.0            # NISAR GSLC HDF5 I/O
   - lxml                 # XML parsing (BIOMASS annotation files)
+  - pyyaml               # NISAR runconfig parsing
   - netcdf4              # NetCDF support (ionosphere LUT files)
   - xarray               # N-dimensional labeled arrays (ionosphere processing)
 
   # Utilities
   - python-dateutil      # Date/time utilities
   - requests             # HTTP library (for downloading)
+  - tqdm                 # Progress bars (NISAR tile streaming)
 
-  # pip packages (not available on conda-forge or require pip install)
+  # pip packages (not on conda-forge or require pip install)
   - pip
   - pip:
-      - sardem>=0.13     # DEM downloading (supports NISAR DEM source)
+      - jsonargparse>=4.27  # CLI + config dump
+      - sardem>=0.13        # DEM downloading (supports NISAR DEM source)
       # biomass-reader installed separately from GitHub with:
       #   git clone https://github.com/scottstanie/biomass-reader.git
       #   pip install -e './biomass-reader[ionosphere]'
@@ -46,20 +51,23 @@ platforms:
 # ==========================
 # 1. Create environment:
 #    conda env create -f environment.yaml
-#    conda activate biomass_processing
+#    conda activate rift
 #
-# 2. Install biomass-reader (required, not on conda):
+# 2. Install biomass-reader (required for the BIOMASS workflow, not on conda):
 #    git clone https://github.com/scottstanie/biomass-reader.git
-#    cd biomass-reader
-#    pip install -e '.[ionosphere]'
+#    cd biomass-reader && pip install -e '.[ionosphere]' && cd ..
 #
-# 3. Test installation:
-#    python tests/test_grid_system.py
+# 3. Install rift:
+#    pip install -e .
+#
+# 4. Test installation:
+#    pytest tests/
 #
 # Key package purposes:
 # ---------------------
-# isce3: Performs the actual radar-to-map geocoding using orbit, DEM, and Doppler
-# gdal/rasterio: Read/write GeoTIFF files, coordinate transformations
-# biomass-reader: Parses BIOMASS L1A products into isce3 objects (RadarGrid, Orbit, Doppler)
-# sardem: Downloads DEMs from various sources (we use NISAR DEM for Antarctica)
-# netcdf4/xarray: Process ionosphere correction LUT files (optional)
+# isce3: BIOMASS radar-to-map geocoding using orbit, DEM, and Doppler
+# gdal/rasterio: read/write COG GeoTIFFs, coordinate transforms
+# h5py: read NISAR GSLC HDF5 (frequency A amplitude + masks)
+# scipy: anti-alias low-pass + complex resampling for NISAR regrid
+# biomass-reader: parses BIOMASS L1A products into isce3 objects (RadarGrid, Orbit, Doppler)
+# sardem: downloads DEMs (NISAR DEM source for Antarctica) when --dem is not supplied

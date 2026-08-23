@@ -1,6 +1,12 @@
 # API Reference
 
-## grid_utils.py
+> **Note — default spacing changed to 5×5 m.** `ANTARCTICA_GRID` now defaults to **5×5 m**
+> (shared BIOMASS/NISAR grid). The examples below that show `y_posting = 40.0` /
+> `chunk_size_y = 20480` illustrate the **BIOMASS-native 5×40** grid, which you now build
+> explicitly with `ANTARCTICA_GRID.with_spacing(5, 40)`. See
+> [GRID_RESAMPLING_DECISION.md](GRID_RESAMPLING_DECISION.md) for the rationale.
+
+## rift.grid
 
 ### AntarcticaGrid Class
 
@@ -9,10 +15,17 @@ The `AntarcticaGrid` dataclass encapsulates the master grid parameters and provi
 #### Instance: ANTARCTICA_GRID
 
 ```python
-from grid_utils import ANTARCTICA_GRID
+from rift.grid import ANTARCTICA_GRID
 ```
 
-A singleton instance pre-configured with Antarctica master grid parameters.
+A singleton instance pre-configured with Antarctica master grid parameters (default 5×5 m).
+
+#### Building a non-default grid
+
+```python
+# BIOMASS-native 5×40 (immutable — returns a new instance)
+biomass_grid = ANTARCTICA_GRID.with_spacing(5.0, 40.0)
+```
 
 #### Properties
 
@@ -21,7 +34,7 @@ A singleton instance pre-configured with Antarctica master grid parameters.
 ```python
 ANTARCTICA_GRID.epsg          # 3031 (Antarctic Polar Stereographic)
 ANTARCTICA_GRID.x_posting     # 5.0 meters
-ANTARCTICA_GRID.y_posting     # 40.0 meters
+ANTARCTICA_GRID.y_posting     # 5.0 meters (default; 40.0 for BIOMASS-native)
 ANTARCTICA_GRID.chunk_pixels  # 512
 ```
 

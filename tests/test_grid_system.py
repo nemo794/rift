@@ -14,24 +14,36 @@ from pathlib import Path
 import json
 import numpy as np
 
-# Add src directory to path
+# Prefer the installed package; fall back to the src tree for uninstalled runs.
 sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
 
-from grid_utils import ANTARCTICA_GRID
+from rift.grid import ANTARCTICA_GRID
+
+# BIOMASS-native grid (5×40) — used by tests that assert the anisotropic chunk size
+# (chunk_size_y = 20480). The default ANTARCTICA_GRID is now 5×5 (chunk_size_y = 2560).
+BIOMASS_GRID = ANTARCTICA_GRID.with_spacing(5.0, 40.0)
 
 
 def test_master_grid_properties():
-    """Test that master grid has expected properties."""
+    """Test that the default master grid is 5×5 and derives chunk sizes from spacing."""
     print("=" * 70)
     print("TEST 1: Master Grid Properties")
     print("=" * 70)
 
+    # Default spacing is now 5×5 (shared BIOMASS/NISAR grid).
     assert ANTARCTICA_GRID.epsg == 3031
     assert ANTARCTICA_GRID.x_posting == 5.0
-    assert ANTARCTICA_GRID.y_posting == 40.0
+    assert ANTARCTICA_GRID.y_posting == 5.0
     assert ANTARCTICA_GRID.chunk_pixels == 512
     assert ANTARCTICA_GRID.chunk_size_x == 2560.0
-    assert ANTARCTICA_GRID.chunk_size_y == 20480.0
+    assert ANTARCTICA_GRID.chunk_size_y == 2560.0
+
+    # BIOMASS-native 5×40 via with_spacing; original stays frozen/unchanged.
+    biomass = ANTARCTICA_GRID.with_spacing(5.0, 40.0)
+    assert biomass.x_posting == 5.0
+    assert biomass.y_posting == 40.0
+    assert biomass.chunk_size_y == 20480.0
+    assert ANTARCTICA_GRID.y_posting == 5.0  # unchanged (immutable)
 
     print("✓ All master grid properties correct")
     return True
@@ -43,10 +55,13 @@ def test_chunk_snapping():
     print("TEST 2: Chunk Boundary Snapping")
     print("=" * 70)
 
+    # Uses the BIOMASS-native 5×40 grid (chunk_size_y = 20480) to exercise anisotropy.
+    grid = BIOMASS_GRID
+
     # Test case 1: Positive coordinates
     bbox1 = {'x_min': 123456.7, 'x_max': 234567.8,
              'y_min': 456789.1, 'y_max': 567890.2}
-    snapped1 = ANTARCTICA_GRID.snap_bbox(bbox1, expand=True)
+    snapped1 = grid.snap_bbox(bbox1, expand=True)
 
     assert snapped1['x_min'] % 2560 == 0, f"x_min not aligned: {snapped1['x_min']}"
     assert snapped1['x_max'] % 2560 == 0, f"x_max not aligned: {snapped1['x_max']}"
@@ -56,7 +71,7 @@ def test_chunk_snapping():
     # Test case 2: Negative coordinates
     bbox2 = {'x_min': -234567.8, 'x_max': -123456.7,
              'y_min': -987654.3, 'y_max': -876543.2}
-    snapped2 = ANTARCTICA_GRID.snap_bbox(bbox2, expand=True)
+    snapped2 = grid.snap_bbox(bbox2, expand=True)
 
     assert snapped2['x_min'] % 2560 == 0, f"x_min not aligned: {snapped2['x_min']}"
     assert snapped2['x_max'] % 2560 == 0, f"x_max not aligned: {snapped2['x_max']}"
@@ -66,16 +81,22 @@ def test_chunk_snapping():
     # Test case 3: Mixed positive/negative (crosses origin)
     bbox3 = {'x_min': -50000, 'x_max': 50000,
              'y_min': -50000, 'y_max': 50000}
-    snapped3 = ANTARCTICA_GRID.snap_bbox(bbox3, expand=True)
+    snapped3 = grid.snap_bbox(bbox3, expand=True)
 
     assert snapped3['x_min'] % 2560 == 0
     assert snapped3['x_max'] % 2560 == 0
     assert snapped3['y_min'] % 20480 == 0
     assert snapped3['y_max'] % 20480 == 0
 
+    # And the default 5×5 grid snaps y to 2560 boundaries.
+    snapped_default = ANTARCTICA_GRID.snap_bbox(bbox1, expand=True)
+    assert snapped_default['y_min'] % 2560 == 0
+    assert snapped_default['y_max'] % 2560 == 0
+
     print(f"✓ Test case 1 (positive coords): PASS")
     print(f"✓ Test case 2 (negative coords): PASS")
     print(f"✓ Test case 3 (crosses origin): PASS")
+    print(f"✓ Default 5×5 grid snapping: PASS")
     return True
 
 
@@ -159,23 +180,29 @@ def test_chunk_indexing():
     print("TEST 5: Chunk Indexing")
     print("=" * 70)
 
+    # Uses the BIOMASS-native 5×40 grid (chunk_size_y = 20480).
+    grid = BIOMASS_GRID
+
     # Test at origin
-    assert ANTARCTICA_GRID.get_chunk_indices(0, 0) == (0, 0)
+    assert grid.get_chunk_indices(0, 0) == (0, 0)
 
     # Test positive quadrant
-    assert ANTARCTICA_GRID.get_chunk_indices(2560, 20480) == (1, 1)
-    assert ANTARCTICA_GRID.get_chunk_indices(5120, 40960) == (2, 2)
+    assert grid.get_chunk_indices(2560, 20480) == (1, 1)
+    assert grid.get_chunk_indices(5120, 40960) == (2, 2)
 
     # Test negative quadrant
-    assert ANTARCTICA_GRID.get_chunk_indices(-2560, -20480) == (-1, -1)
-    assert ANTARCTICA_GRID.get_chunk_indices(-5120, -40960) == (-2, -2)
+    assert grid.get_chunk_indices(-2560, -20480) == (-1, -1)
+    assert grid.get_chunk_indices(-5120, -40960) == (-2, -2)
 
     # Test chunk bounds retrieval
-    bounds_00 = ANTARCTICA_GRID.get_chunk_bounds(0, 0)
+    bounds_00 = grid.get_chunk_bounds(0, 0)
     assert bounds_00 == {'x_min': 0, 'x_max': 2560, 'y_min': 0, 'y_max': 20480}
 
-    bounds_neg = ANTARCTICA_GRID.get_chunk_bounds(-1, -1)
+    bounds_neg = grid.get_chunk_bounds(-1, -1)
     assert bounds_neg == {'x_min': -2560, 'x_max': 0, 'y_min': -20480, 'y_max': 0}
+
+    # Default 5×5 grid: chunk (1,1) is at 2560,2560.
+    assert ANTARCTICA_GRID.get_chunk_indices(2560, 2560) == (1, 1)
 
     print(f"✓ Origin chunk (0, 0): PASS")
     print(f"✓ Positive chunk indexing: PASS")

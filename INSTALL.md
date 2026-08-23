@@ -27,12 +27,12 @@ Or using mamba (faster):
 mamba env create -f environment.yaml
 ```
 
-This creates a conda environment named `biomass_processing` with all dependencies except `biomass-reader`.
+This creates a conda environment named `rift` with all dependencies except `biomass-reader`.
 
 ### 3. Activate the Environment
 
 ```bash
-conda activate biomass_processing
+conda activate rift
 ```
 
 ### 4. Install biomass-reader
@@ -111,9 +111,9 @@ conda install -c conda-forge libgdal-netcdf
 
 If Python can't find the `biomass_reader` module:
 
-1. Make sure you're in the `biomass_processing` conda environment:
+1. Make sure you're in the `rift` conda environment:
    ```bash
-   conda activate biomass_processing
+   conda activate rift
    ```
 
 2. Verify biomass-reader is installed:
@@ -149,7 +149,7 @@ To completely remove the environment:
 
 ```bash
 conda deactivate
-conda env remove -n biomass_processing
+conda env remove -n rift
 ```
 
 ## Alternative Installation (pip only)
