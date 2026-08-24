@@ -43,10 +43,11 @@ flowchart TD
 
 ```mermaid
 flowchart LR
-    G[Input Granule] --> P[Process onto<br/>fixed geogrid]
-    P --> A[Output Amplitude COGs<br/>512x512 chunks]
-    A --> I[Inference Step]
-    I --> M[Output mask COGs]
+    G[/Input Granule<br/>BIOMASS/NISAR/] --> P([Process onto<br/>fixed geogrid])
+    DEM[/DEM<br/>BIOMASS only/] --> P
+    P --> A[/Output Amplitude COGs<br/>512x512 chunks/]
+    A --> I([Inference Step])
+    I --> M[/Output mask COGs/]
 ```
 
 ## Code layers
