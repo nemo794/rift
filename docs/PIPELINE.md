@@ -39,17 +39,14 @@ flowchart TD
     I --> CFG[nisar_e2e_config.json → output/]
 ```
 
-## Per-granule sequence (either workflow)
+## End-to-End process (either sensor)
 
 ```mermaid
-sequenceDiagram
-    participant R as run_end_to_end
-    participant S as sensor step
-    participant IF as infer
-    R->>S: produce amplitude COGs (local workdir)
-    loop each amplitude COG
-        R->>IF: threshold(cog, T) to binary mask COG (output/)
-    end
+flowchart LR
+    G[Input Granule] --> P[Process onto<br/>fixed geogrid]
+    P --> A[Output Amplitude COGs<br/>512x512 chunks]
+    A --> I[Inference Step]
+    I --> M[Output mask COGs]
 ```
 
 ## Code layers
