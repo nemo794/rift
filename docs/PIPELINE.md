@@ -50,8 +50,7 @@ sequenceDiagram
     loop each amplitude COG
         R->>IF: threshold(cog, T) → binary mask COG (output/)
     end
-    R-->>R: keep or delete amp COGs; write *_config.json to output/
-
+    Note over R: keep or delete amp COGs; write *_config.json to output/
 ```
 
 ## Code layers
