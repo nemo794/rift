@@ -41,6 +41,7 @@ from rasterio.warp import transform_bounds
 from rasterio.windows import from_bounds
 
 from biomass_reader import BiomassSlc
+from biomass_reader._constants import POLARIZATION_ORDER
 import isce3
 
 from rift.cogutil import base_profile, write_cog
@@ -49,6 +50,42 @@ from rift.biomass.geogrid import ensure_granule_dir
 
 class DemCoverageError(Exception):
     """Raised when a provided DEM does not cover the output geocoded radar swath."""
+
+
+def read_available_polarizations(granule_path):
+    """
+    Detect which polarizations have valid data in a BIOMASS granule.
+
+    BIOMASS L1A SCS products store amplitude and phase as 4-band GeoTIFFs in the order
+    HH, HV, VH, VV. This function checks which bands contain non-zero data to determine
+    which polarizations are actually available in the product.
+
+    Args:
+        granule_path: Path to BIOMASS L1A SCS granule directory or .zip file
+
+    Returns:
+        list: Available polarizations (e.g., ['HH', 'HV', 'VH', 'VV'])
+    """
+    granule_path = Path(granule_path)
+    granule_path = ensure_granule_dir(granule_path)
+
+    measurement_dir = granule_path / "measurement"
+    if not measurement_dir.exists():
+        raise ValueError(f"Measurement directory not found: {measurement_dir}")
+
+    abs_file = list(measurement_dir.glob("*abs*.tiff"))
+    if not abs_file:
+        raise ValueError(f"No amplitude file found in {measurement_dir}")
+    abs_file = abs_file[0]
+
+    available_pols = []
+    with rasterio.open(abs_file) as src:
+        for idx, pol in enumerate(POLARIZATION_ORDER, start=1):
+            band = src.read(idx, window=rasterio.windows.Window(0, 0, 100, 100))
+            if np.any(band != 0):
+                available_pols.append(pol)
+
+    return available_pols
 
 
 def check_dem_covers_grid(dem_file, grid_params, min_valid_fraction=0.0):

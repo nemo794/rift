@@ -55,14 +55,37 @@ def biomass_to_cogs(granule: Path, dem: Path, output_dir: Path, *,
     Geocode a BIOMASS granule to amplitude COGs (one per polarization).
 
     footprint → margin → snap-to-chunks geogrid → ISCE3 geocode_slc (complex) → |·| COG.
+
+    Args:
+        granule: Path to BIOMASS L1A SCS granule directory or .zip file
+        dem: Path to DEM file
+        output_dir: Output directory for COG files
+        grid: Target grid (default: ANTARCTICA_GRID)
+        pols: Polarizations to process (default: None = all available polarizations)
+        margin: Margin in meters to add around footprint (default: 5000.0)
+        polarization_for_footprint: Polarization to use for footprint computation (default: "HH")
+
+    Returns:
+        List of paths to created COG files
     """
     from rift.biomass.geogrid import compute_biomass_footprint, create_geogrid_params
-    from rift.biomass.geocode import geocode_biomass_granule, write_biomass_cog
+    from rift.biomass.geocode import geocode_biomass_granule, write_biomass_cog, read_available_polarizations
 
     granule = Path(granule)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    pols = pols or ["HH"]
+
+    if pols is None:
+        pols = read_available_polarizations(granule)
+        print(f"Detected available polarizations: {pols}")
+    else:
+        available = read_available_polarizations(granule)
+        pols = [p for p in pols if p in available]
+        if not pols:
+            raise ValueError(f"None of the requested polarizations found in granule")
+        missing = set(pols) - set(available)
+        if missing:
+            print(f"Warning: Requested polarizations {missing} not found, skipping")
 
     bbox = compute_biomass_footprint(granule, polarization_for_footprint)
     geogrid = create_geogrid_params(bbox, margin_m=margin, snap_to_master_grid=True, grid=grid)
@@ -90,7 +113,21 @@ def nisar_to_cogs(gslc: Path, output_dir: Path, *,
                   grid: AntarcticaGrid = ANTARCTICA_GRID,
                   pols: Optional[List[str]] = None, native: bool = False,
                   method: str = "nearest", antialias: bool = True) -> List[Path]:
-    """Extract freq-A amplitude and regrid a NISAR GSLC to amplitude COGs (per pol)."""
+    """
+    Extract freq-A amplitude and regrid a NISAR GSLC to amplitude COGs (per pol).
+
+    Args:
+        gslc: Path to NISAR GSLC HDF5 file
+        output_dir: Output directory for COG files
+        grid: Target grid (default: ANTARCTICA_GRID)
+        pols: Polarizations to process (default: None = all available polarizations)
+        native: Keep native 5×5 posting (snap extent only)
+        method: Interpolation kernel for resampling
+        antialias: Anti-alias before downsampling
+
+    Returns:
+        List of paths to created COG files
+    """
     from rift.nisar.extract import extract_amplitude_to_cogs
 
     return extract_amplitude_to_cogs(
@@ -160,16 +197,34 @@ def run_biomass_end_to_end(granule: Path, output_dir: Path, *,
     ``keep_intermediates``; otherwise they are produced in a temp workdir and deleted.
     Writes ``biomass_e2e_config.json`` to ``output_dir``.
 
+    Args:
+        granule: Path to BIOMASS L1A SCS granule directory or .zip file
+        output_dir: Output directory for final products
+        dem: Path to DEM file (default: None = auto-download)
+        x_spacing: Grid X spacing in meters (default: 5.0)
+        y_spacing: Grid Y spacing in meters (default: 5.0)
+        native: Use native BIOMASS posting (5×40 m) instead of requested spacing
+        margin: Margin in meters around footprint (default: 5000.0)
+        threshold: Threshold value for inference (default: 0.5)
+        pols: Polarizations to process (default: None = all available)
+        keep_intermediates: Keep amplitude COGs in output_dir (default: False)
+        config: Additional config metadata to include in output JSON
+
     Returns:
         dict: {"masks": [...], "amplitudes": [...], "config": path}
     """
     from rift.dem import ensure_dem
     from rift.biomass.geogrid import compute_biomass_footprint
+    from rift.biomass.geocode import read_available_polarizations
 
     granule = Path(granule)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    pols = pols or ["HH"]
+
+    if pols is None:
+        pols = read_available_polarizations(granule)
+        print(f"Processing all available polarizations: {pols}")
+
     grid = _biomass_grid(x_spacing, y_spacing, native)
 
     resolved = {
@@ -212,12 +267,32 @@ def run_nisar_end_to_end(gslc: Path, output_dir: Path, *,
     Masks always land in ``output_dir``. Amplitude COGs land there only if
     ``keep_intermediates``. Writes ``nisar_e2e_config.json`` to ``output_dir``.
 
+    Args:
+        gslc: Path to NISAR GSLC HDF5 file
+        output_dir: Output directory for final products
+        x_spacing: Grid X spacing in meters (default: 5.0)
+        y_spacing: Grid Y spacing in meters (default: 5.0)
+        native: Keep native 5×5 posting (snap extent only)
+        method: Interpolation kernel for resampling (default: "nearest")
+        antialias: Anti-alias before downsampling (default: True)
+        threshold: Threshold value for inference (default: 0.5)
+        pols: Polarizations to process (default: None = all available)
+        keep_intermediates: Keep amplitude COGs in output_dir (default: False)
+        config: Additional config metadata to include in output JSON
+
     Returns:
         dict: {"masks": [...], "amplitudes": [...], "config": path}
     """
+    from rift.nisar.extract import read_polarizations_list
+
     gslc = Path(gslc)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    if pols is None:
+        pols = read_polarizations_list(gslc)
+        print(f"Processing all available polarizations: {pols}")
+
     grid = _nisar_grid(x_spacing, y_spacing)
 
     resolved = {
