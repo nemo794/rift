@@ -43,12 +43,12 @@ flowchart TD
 
 ```mermaid
 sequenceDiagram
-    participant R as run_*_end_to_end
-    participant S as sensor step (biomass/nisar)
+    participant R as run_end_to_end
+    participant S as sensor step
     participant IF as infer
     R->>S: produce amplitude COGs (local workdir)
     loop each amplitude COG
-        R->>IF: threshold(cog, T) → binary mask COG (output/)
+        R->>IF: threshold(cog, T) to binary mask COG (output/)
     end
     R->>R: keep or delete amp COGs; write config.json to output/
 ```
