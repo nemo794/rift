@@ -27,8 +27,10 @@ import rasterio
 from rasterio.crs import CRS
 
 # COG creation options shared by every product rift writes. PREDICTOR is dtype-dependent
-# (3 = floating point, 2 = horizontal/integer), so it is appended per-call by
-# _cog_options(); the COG driver uses LEVEL (not ZLEVEL) for the DEFLATE level.
+# (3 = floating point, 2 = horizontal/integer) and OVERVIEW_RESAMPLING is data-dependent
+# (AVERAGE for continuous float rasters, NEAREST for categorical/paletted masks), so both
+# are appended per-call by _cog_options(); the COG driver uses LEVEL (not ZLEVEL) for the
+# DEFLATE level.
 _COG_BASE_OPTIONS = [
     "-of", "COG",
     "-co", "BLOCKSIZE=512",
@@ -36,13 +38,16 @@ _COG_BASE_OPTIONS = [
     "-co", "LEVEL=1",
     "-co", "NUM_THREADS=ALL_CPUS",
     "-co", "BIGTIFF=YES",
-    "-co", "OVERVIEW_RESAMPLING=AVERAGE",
 ]
 
 
-def _cog_options(predictor: int) -> list:
-    """Full gdal_translate COG options with a dtype-appropriate PREDICTOR."""
-    return [*_COG_BASE_OPTIONS, "-co", f"PREDICTOR={predictor}"]
+def _cog_options(predictor: int, overview_resampling: str = "AVERAGE") -> list:
+    """Full gdal_translate COG options with a dtype-appropriate PREDICTOR/resampling."""
+    return [
+        *_COG_BASE_OPTIONS,
+        "-co", f"OVERVIEW_RESAMPLING={overview_resampling}",
+        "-co", f"PREDICTOR={predictor}",
+    ]
 
 
 def base_profile(
@@ -92,7 +97,7 @@ def base_profile(
 
 
 def finalize_cog(temp_file: Path, output_file: Path, *, predictor: int = 3,
-                 cleanup: bool = True) -> Path:
+                 overview_resampling: str = "AVERAGE", cleanup: bool = True) -> Path:
     """
     Convert a temporary GeoTIFF to a COG via ``gdal_translate`` and remove the temp file.
 
@@ -100,6 +105,9 @@ def finalize_cog(temp_file: Path, output_file: Path, *, predictor: int = 3,
         temp_file: Path to the temporary tiled GeoTIFF
         output_file: Destination COG path
         predictor: DEFLATE predictor — 3 for float rasters, 2 for integer (e.g. masks)
+        overview_resampling: Overview downsampling method — ``AVERAGE`` for continuous
+            float rasters (amplitude), ``NEAREST`` for categorical/paletted rasters (masks).
+            Averaging palette indices or a sparse binary mask washes it out at zoom-out.
         cleanup: Remove the temporary file on success (default True)
 
     Returns:
@@ -111,7 +119,8 @@ def finalize_cog(temp_file: Path, output_file: Path, *, predictor: int = 3,
     temp_file = Path(temp_file)
     output_file = Path(output_file)
 
-    cmd = ["gdal_translate", str(temp_file), str(output_file), *_cog_options(predictor)]
+    cmd = ["gdal_translate", str(temp_file), str(output_file),
+           *_cog_options(predictor, overview_resampling)]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         raise RuntimeError(f"gdal_translate failed: {result.stderr}")
