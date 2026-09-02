@@ -46,7 +46,7 @@ def test_nisar_e2e_deletes_intermediates_by_default(monkeypatch):
     with tempfile.TemporaryDirectory() as d:
         d = Path(d)
         result = pipeline.run_nisar_end_to_end(
-            Path("dummy.h5"), d, threshold=0.5, keep_intermediates=False
+            Path("dummy.h5"), d, threshold=0.5, keep_intermediates=False, pols=["HH"]
         )
         # Config written.
         assert (d / "nisar_e2e_config.json").exists()
@@ -64,7 +64,7 @@ def test_nisar_e2e_keeps_intermediates(monkeypatch):
     with tempfile.TemporaryDirectory() as d:
         d = Path(d)
         result = pipeline.run_nisar_end_to_end(
-            Path("dummy.h5"), d, threshold=0.5, keep_intermediates=True
+            Path("dummy.h5"), d, threshold=0.5, keep_intermediates=True, pols=["HH"]
         )
         assert len(result["amplitudes"]) == 1
         assert result["amplitudes"][0].exists()
@@ -78,7 +78,7 @@ def test_config_records_resolved_params(monkeypatch):
     with tempfile.TemporaryDirectory() as d:
         d = Path(d)
         pipeline.run_nisar_end_to_end(Path("g.h5"), d, x_spacing=5, y_spacing=40,
-                                      threshold=0.3, keep_intermediates=False)
+                                      threshold=0.3, keep_intermediates=False, pols=["HH"])
         cfg = json.loads((d / "nisar_e2e_config.json").read_text())
         assert cfg["workflow"] == "nisar-e2e"
         assert cfg["y_spacing"] == 40

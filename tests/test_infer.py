@@ -53,11 +53,13 @@ def test_threshold_correctness_and_grid_preserved():
             assert src.dtypes[0] == "uint8"
             assert src.nodata == MASK_NODATA
 
-    # amp > 0.5 → 1; NaN → 0; exactly 0.5 → 0.
+    # amp > 0.5 → 1; exactly 0.5 → 0; NaN/invalid → MASK_NODATA (renders transparent).
     expected = np.array([[0, 0, 1],
-                         [1, 0, 0],
+                         [1, MASK_NODATA, 0],
                          [1, 0, 1]], dtype=np.uint8)
     assert np.array_equal(mask, expected)
+    # Explicit assertion documenting the NaN → MASK_NODATA contract.
+    assert mask[1, 1] == MASK_NODATA
 
 
 if __name__ == "__main__":
