@@ -17,8 +17,13 @@ Individual steps (for local development / debugging):
 
 Grid spacing defaults to 5×5 m (shared BIOMASS/NISAR grid). ``--native`` uses per-sensor
 native posting (BIOMASS 5×40, NISAR 5×5); in native mode cross-sensor chunk alignment is
-not guaranteed. ``--keep-intermediates`` (e2e only, default off) keeps amplitude COGs in
-the output directory instead of deleting them.
+not guaranteed. ``--keep-intermediates`` (e2e only, default off) keeps amplitude/phase COGs
+in the output directory instead of deleting them.
+
+COG products default to a per-polarization amplitude COG (``_<pol>_amp.tif``) plus a
+co-registered phase COG (``_<pol>_phs.tif``, radians -π..π), mirroring the source L1A
+abs/phase measurement layout. ``--amp-only`` writes amplitude only. Inference always runs
+on the amplitude COG.
 """
 
 from __future__ import annotations
@@ -46,7 +51,9 @@ def _build_parser() -> ArgumentParser:
     p.add_argument("--threshold", type=float, default=0.5, help="Inference amplitude threshold")
     p.add_argument("--pols", type=List[str], default=["HH"], help="Polarizations, e.g. [HH,HV]")
     p.add_argument("--keep-intermediates", action="store_true",
-                   help="Keep amplitude COGs in output/ (default: delete)")
+                   help="Keep amplitude/phase COGs in output/ (default: delete)")
+    p.add_argument("--amp-only", action="store_true",
+                   help="Write amplitude only (default: also write a separate phase COG per pol)")
     sub.add_subcommand("biomass-e2e", p)
 
     # --- nisar-e2e --------------------------------------------------------------------
@@ -64,6 +71,8 @@ def _build_parser() -> ArgumentParser:
     p.add_argument("--pols", type=Optional[List[str]], default=None,
                    help="Polarizations (default: all freq-A)")
     p.add_argument("--keep-intermediates", action="store_true")
+    p.add_argument("--amp-only", action="store_true",
+                   help="Write amplitude only (default: also write a separate phase COG per pol)")
     sub.add_subcommand("nisar-e2e", p)
 
     # --- biomass2cog ------------------------------------------------------------------
@@ -76,6 +85,8 @@ def _build_parser() -> ArgumentParser:
     p.add_argument("--native", action="store_true")
     p.add_argument("--margin", type=float, default=5000.0)
     p.add_argument("--pols", type=List[str], default=["HH"])
+    p.add_argument("--amp-only", action="store_true",
+                   help="Write amplitude only (default: also write a separate phase COG per pol)")
     sub.add_subcommand("biomass2cog", p)
 
     # --- nisar2cog --------------------------------------------------------------------
@@ -89,6 +100,8 @@ def _build_parser() -> ArgumentParser:
                    choices=["nearest", "bilinear", "lanczos", "average"])
     p.add_argument("--no-antialias", action="store_true")
     p.add_argument("--pols", type=Optional[List[str]], default=None)
+    p.add_argument("--amp-only", action="store_true",
+                   help="Write amplitude only (default: also write a separate phase COG per pol)")
     sub.add_subcommand("nisar2cog", p)
 
     # --- biomass-infer / nisar-infer --------------------------------------------------
@@ -129,7 +142,7 @@ def _dispatch(argv: Optional[List[str]] = None) -> int:
             args.granule, args.output, dem=args.dem,
             x_spacing=args.x_spacing, y_spacing=args.y_spacing, native=args.native,
             margin=args.margin, threshold=args.threshold, pols=args.pols,
-            keep_intermediates=args.keep_intermediates,
+            keep_intermediates=args.keep_intermediates, amp_only=args.amp_only,
         )
         _report(result)
 
@@ -140,7 +153,7 @@ def _dispatch(argv: Optional[List[str]] = None) -> int:
             x_spacing=args.x_spacing, y_spacing=args.y_spacing, native=args.native,
             method=args.resampling, antialias=not args.no_antialias,
             threshold=args.threshold, pols=args.pols,
-            keep_intermediates=args.keep_intermediates,
+            keep_intermediates=args.keep_intermediates, amp_only=args.amp_only,
         )
         _report(result)
 
@@ -153,7 +166,8 @@ def _dispatch(argv: Optional[List[str]] = None) -> int:
         dem_path = ensure_dem(args.dem, bbox=footprint, workdir=args.output)
         outs = biomass_to_cogs(args.granule, dem_path, args.output, grid=grid,
                                pols=args.pols, margin=args.margin,
-                               polarization_for_footprint=args.pols[0])
+                               polarization_for_footprint=args.pols[0],
+                               amp_only=args.amp_only)
         _report_list(outs)
 
     elif cmd == "nisar2cog":
@@ -161,7 +175,7 @@ def _dispatch(argv: Optional[List[str]] = None) -> int:
         grid = _nisar_grid(args.x_spacing, args.y_spacing)
         outs = nisar_to_cogs(args.gslc, args.output, grid=grid, pols=args.pols,
                              native=args.native, method=args.resampling,
-                             antialias=not args.no_antialias)
+                             antialias=not args.no_antialias, amp_only=args.amp_only)
         _report_list(outs)
 
     elif cmd in ("biomass-infer", "nisar-infer"):

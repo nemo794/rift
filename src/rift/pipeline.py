@@ -50,11 +50,13 @@ def _nisar_grid(x_spacing: float, y_spacing: float) -> AntarcticaGrid:
 def biomass_to_cogs(granule: Path, dem: Path, output_dir: Path, *,
                     grid: AntarcticaGrid = ANTARCTICA_GRID,
                     pols: Optional[List[str]] = None, margin: float = 5000.0,
-                    polarization_for_footprint: str = "HH") -> List[Path]:
+                    polarization_for_footprint: str = "HH",
+                    amp_only: bool = False) -> List[Path]:
     """
-    Geocode a BIOMASS granule to amplitude COGs (one per polarization).
+    Geocode a BIOMASS granule to amplitude (and phase) COGs (one each per polarization).
 
-    footprint → margin → snap-to-chunks geogrid → ISCE3 geocode_slc (complex) → |·| COG.
+    footprint → margin → snap-to-chunks geogrid → ISCE3 geocode_slc (complex) →
+    |·| amplitude COG (+ angle phase COG unless ``amp_only``).
 
     Args:
         granule: Path to BIOMASS L1A SCS granule directory or .zip file
@@ -64,9 +66,10 @@ def biomass_to_cogs(granule: Path, dem: Path, output_dir: Path, *,
         pols: Polarizations to process (default: None = all available polarizations)
         margin: Margin in meters to add around footprint (default: 5000.0)
         polarization_for_footprint: Polarization to use for footprint computation (default: "HH")
+        amp_only: Write amplitude only (default: also write a separate phase COG per pol)
 
     Returns:
-        List of paths to created COG files
+        List of paths to created COG files (amplitude and, unless amp_only, phase)
     """
     from rift.biomass.geogrid import compute_biomass_footprint, create_geogrid_params
     from rift.biomass.geocode import geocode_biomass_granule, write_biomass_cog, read_available_polarizations
@@ -95,6 +98,7 @@ def biomass_to_cogs(granule: Path, dem: Path, output_dir: Path, *,
     for pol in pols:
         complex_data, acq_time = geocode_biomass_granule(granule, dem, geogrid, pol)
         out = output_dir / f"{base}_{pol}_amp.tif"
+        phase_out = None if amp_only else output_dir / f"{base}_{pol}_phs.tif"
         metadata = {
             "GRID_EPSG": str(geogrid["epsg"]),
             "POSTING": f"{geogrid['x_posting']}m × {geogrid['y_posting']}m",
@@ -103,18 +107,19 @@ def biomass_to_cogs(granule: Path, dem: Path, output_dir: Path, *,
             "BIOMASS_GRANULE": granule.name,
             "PROCESSING": "BIOMASS L1A SCS geocoded to master grid using isce3",
         }
-        write_biomass_cog(out, complex_data, geogrid, acq_time, pol, metadata,
-                          include_phase=False)
-        outputs.append(out)
+        written = write_biomass_cog(out, complex_data, geogrid, acq_time, pol, metadata,
+                                    phase_file=phase_out)
+        outputs.extend(written)
     return outputs
 
 
 def nisar_to_cogs(gslc: Path, output_dir: Path, *,
                   grid: AntarcticaGrid = ANTARCTICA_GRID,
                   pols: Optional[List[str]] = None, native: bool = False,
-                  method: str = "nearest", antialias: bool = True) -> List[Path]:
+                  method: str = "nearest", antialias: bool = True,
+                  amp_only: bool = False) -> List[Path]:
     """
-    Extract freq-A amplitude and regrid a NISAR GSLC to amplitude COGs (per pol).
+    Extract freq-A amplitude (and phase) and regrid a NISAR GSLC to COGs (per pol).
 
     Args:
         gslc: Path to NISAR GSLC HDF5 file
@@ -124,15 +129,17 @@ def nisar_to_cogs(gslc: Path, output_dir: Path, *,
         native: Keep native 5×5 posting (snap extent only)
         method: Interpolation kernel for resampling
         antialias: Anti-alias before downsampling
+        amp_only: Write amplitude only (default: also write a separate phase COG per pol)
 
     Returns:
-        List of paths to created COG files
+        List of paths to created COG files (amplitude and, unless amp_only, phase)
     """
     from rift.nisar.extract import extract_amplitude_to_cogs
 
     return extract_amplitude_to_cogs(
         Path(gslc), output_dir=Path(output_dir), polarizations=pols,
         grid=grid, native=native, method=method, antialias=antialias,
+        amp_only=amp_only,
     )
 
 
@@ -188,14 +195,15 @@ def run_biomass_end_to_end(granule: Path, output_dir: Path, *,
                            x_spacing: float = 5.0, y_spacing: float = 5.0,
                            native: bool = False, margin: float = 5000.0,
                            threshold: float = 0.5, pols: Optional[List[str]] = None,
-                           keep_intermediates: bool = False,
+                           keep_intermediates: bool = False, amp_only: bool = False,
                            config: Optional[Dict] = None) -> Dict[str, List[Path]]:
     """
     BIOMASS end-to-end: ensure DEM → geocode → amplitude COGs → threshold → mask COGs.
 
-    Masks always land in ``output_dir``. Amplitude COGs land there only if
+    Masks always land in ``output_dir``. Amplitude (and phase) COGs land there only if
     ``keep_intermediates``; otherwise they are produced in a temp workdir and deleted.
-    Writes ``biomass_e2e_config.json`` to ``output_dir``.
+    Inference always runs on the amplitude COGs only. Writes ``biomass_e2e_config.json``
+    to ``output_dir``.
 
     Args:
         granule: Path to BIOMASS L1A SCS granule directory or .zip file
@@ -207,7 +215,8 @@ def run_biomass_end_to_end(granule: Path, output_dir: Path, *,
         margin: Margin in meters around footprint (default: 5000.0)
         threshold: Threshold value for inference (default: 0.5)
         pols: Polarizations to process (default: None = all available)
-        keep_intermediates: Keep amplitude COGs in output_dir (default: False)
+        keep_intermediates: Keep amplitude/phase COGs in output_dir (default: False)
+        amp_only: Write amplitude only (default: also write a separate phase COG per pol)
         config: Additional config metadata to include in output JSON
 
     Returns:
@@ -231,7 +240,7 @@ def run_biomass_end_to_end(granule: Path, output_dir: Path, *,
         "workflow": "biomass-e2e", "granule": str(granule),
         "x_spacing": grid.x_posting, "y_spacing": grid.y_posting, "native": native,
         "margin": margin, "threshold": threshold, "pols": pols,
-        "keep_intermediates": keep_intermediates,
+        "keep_intermediates": keep_intermediates, "amp_only": amp_only,
     }
     if config:
         resolved.update(config)
@@ -243,10 +252,13 @@ def run_biomass_end_to_end(granule: Path, output_dir: Path, *,
 
     workdir = Path(tempfile.mkdtemp(prefix="rift_biomass_", dir=output_dir))
     try:
-        amp_cogs = biomass_to_cogs(granule, dem_path, workdir, grid=grid, pols=pols,
-                                   margin=margin, polarization_for_footprint=pols[0])
+        cogs = biomass_to_cogs(granule, dem_path, workdir, grid=grid, pols=pols,
+                               margin=margin, polarization_for_footprint=pols[0],
+                               amp_only=amp_only)
+        # Inference runs on amplitude COGs only; phase is a passthrough product.
+        amp_cogs = [c for c in cogs if c.name.endswith("_amp.tif")]
         masks = infer_cogs(amp_cogs, output_dir, threshold)
-        kept = _finalize_intermediates(amp_cogs, output_dir, keep_intermediates)
+        kept = _finalize_intermediates(cogs, output_dir, keep_intermediates)
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 
@@ -259,13 +271,14 @@ def run_nisar_end_to_end(gslc: Path, output_dir: Path, *,
                          native: bool = False, method: str = "nearest",
                          antialias: bool = True, threshold: float = 0.5,
                          pols: Optional[List[str]] = None,
-                         keep_intermediates: bool = False,
+                         keep_intermediates: bool = False, amp_only: bool = False,
                          config: Optional[Dict] = None) -> Dict[str, List[Path]]:
     """
     NISAR end-to-end: extract+regrid → amplitude COGs → threshold → mask COGs.
 
-    Masks always land in ``output_dir``. Amplitude COGs land there only if
-    ``keep_intermediates``. Writes ``nisar_e2e_config.json`` to ``output_dir``.
+    Masks always land in ``output_dir``. Amplitude (and phase) COGs land there only if
+    ``keep_intermediates``. Inference always runs on the amplitude COGs only. Writes
+    ``nisar_e2e_config.json`` to ``output_dir``.
 
     Args:
         gslc: Path to NISAR GSLC HDF5 file
@@ -277,7 +290,8 @@ def run_nisar_end_to_end(gslc: Path, output_dir: Path, *,
         antialias: Anti-alias before downsampling (default: True)
         threshold: Threshold value for inference (default: 0.5)
         pols: Polarizations to process (default: None = all available)
-        keep_intermediates: Keep amplitude COGs in output_dir (default: False)
+        keep_intermediates: Keep amplitude/phase COGs in output_dir (default: False)
+        amp_only: Write amplitude only (default: also write a separate phase COG per pol)
         config: Additional config metadata to include in output JSON
 
     Returns:
@@ -299,17 +313,19 @@ def run_nisar_end_to_end(gslc: Path, output_dir: Path, *,
         "workflow": "nisar-e2e", "gslc": str(gslc),
         "x_spacing": grid.x_posting, "y_spacing": grid.y_posting, "native": native,
         "resampling": method, "antialias": antialias, "threshold": threshold,
-        "pols": pols, "keep_intermediates": keep_intermediates,
+        "pols": pols, "keep_intermediates": keep_intermediates, "amp_only": amp_only,
     }
     if config:
         resolved.update(config)
 
     workdir = Path(tempfile.mkdtemp(prefix="rift_nisar_", dir=output_dir))
     try:
-        amp_cogs = nisar_to_cogs(gslc, workdir, grid=grid, pols=pols, native=native,
-                                 method=method, antialias=antialias)
+        cogs = nisar_to_cogs(gslc, workdir, grid=grid, pols=pols, native=native,
+                             method=method, antialias=antialias, amp_only=amp_only)
+        # Inference runs on amplitude COGs only; phase is a passthrough product.
+        amp_cogs = [c for c in cogs if c.name.endswith("_amp.tif")]
         masks = infer_cogs(amp_cogs, output_dir, threshold)
-        kept = _finalize_intermediates(amp_cogs, output_dir, keep_intermediates)
+        kept = _finalize_intermediates(cogs, output_dir, keep_intermediates)
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 

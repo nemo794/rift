@@ -19,11 +19,11 @@ Arguments:
     --dem:              DEM file in EPSG:3031
     --output:           Output COG file
     --polarization:     Polarization to process (HH, HV, VH, VV)
-    --include-phase:    Include phase band in output (default: amplitude only)
+    --amp-only:         Write amplitude only (default: also write a separate phase COG)
 
-Output bands:
-    Band 1: Amplitude (linear amplitude of complex SAR signal)
-    Band 2: Phase (in radians, range: -π to +π) [only if --include-phase]
+Outputs (one single-band COG each, mirroring the source L1A abs/phase layout):
+    <output>:      Amplitude (linear amplitude of complex SAR signal)
+    <output>_phs:  Phase (in radians, range: -π to +π) [unless --amp-only]
 """
 
 import argparse
@@ -302,23 +302,28 @@ def geocode_biomass_granule(granule_path, dem_file, grid_params, polarization):
 
 
 def write_biomass_cog(output_file, complex_data, grid_params, acq_time, polarization,
-                      metadata, include_phase=False):
+                      metadata, phase_file=None):
     """
-    Write COG (amplitude only or amplitude + phase) from complex geocoded data.
+    Write single-band amplitude and (optionally) phase COGs from complex geocoded data.
 
-    Band structure:
-        Band 1: Amplitude (linear)
-        Band 2: Phase (radians, -π to +π) [optional]
+    Amplitude and phase are written to *separate* single-band files, mirroring the source
+    BIOMASS L1A SCS measurement layout (``*_i_abs.tiff`` / ``*_i_phase.tiff``):
+        * ``output_file``: amplitude (linear)
+        * ``phase_file``:  phase (radians, -π to +π) — only if ``phase_file`` is given
 
     The temporary-GeoTIFF write and gdal_translate → COG conversion are delegated to
     :mod:`rift.cogutil` so COG options stay consistent across all rift products.
 
     Args:
-        include_phase: If True, write both amplitude and phase. If False, only amplitude.
+        output_file: Destination amplitude COG path
+        phase_file: Destination phase COG path, or None to skip phase output
+
+    Returns:
+        list[Path]: Paths of the COG(s) written (amplitude first, then phase if any)
     """
-    num_bands = 2 if include_phase else 1
-    band_desc = "amplitude + phase" if include_phase else "amplitude only"
-    print(f"\nWriting {num_bands}-band COG ({band_desc}): {output_file}")
+    include_phase = phase_file is not None
+    band_desc = "amplitude + phase (separate files)" if include_phase else "amplitude only"
+    print(f"\nWriting COG(s) ({band_desc}): {output_file}")
 
     # Extract amplitude (phase discarded unless requested — amplitude is detected last)
     amplitude = np.abs(complex_data).astype(np.float32)
@@ -335,11 +340,11 @@ def write_biomass_cog(output_file, complex_data, grid_params, acq_time, polariza
         epsg=grid_params['epsg'],
         transform=transform,
         dtype='float32',
-        count=num_bands,
+        count=1,
         nodata=np.nan,
     )
 
-    bands = {
+    amp_bands = {
         1: (amplitude, {
             'BAND_TYPE': 'amplitude',
             'ACQUISITION_TIME': acq_time.isoformat(),
@@ -347,25 +352,31 @@ def write_biomass_cog(output_file, complex_data, grid_params, acq_time, polariza
             'UNITS': 'linear amplitude',
         }),
     }
-    band_descriptions = {1: f"BIOMASS {polarization} - Amplitude"}
+    write_cog(output_file, amp_bands, profile,
+              band_descriptions={1: f"BIOMASS {polarization} - Amplitude"},
+              global_meta={**metadata, 'BAND_TYPE': 'amplitude'})
+    print(f"✓ Created: {output_file} ({output_file.stat().st_size / 1e6:.1f} MB)")
+
+    written = [output_file]
 
     if include_phase:
         phase = np.angle(complex_data).astype(np.float32)
-        bands[2] = (phase, {
-            'BAND_TYPE': 'phase',
-            'ACQUISITION_TIME': acq_time.isoformat(),
-            'POLARIZATION': polarization,
-            'UNITS': 'radians',
-            'RANGE': '-π to +π',
-        })
-        band_descriptions[2] = f"BIOMASS {polarization} - Phase"
+        phase_bands = {
+            1: (phase, {
+                'BAND_TYPE': 'phase',
+                'ACQUISITION_TIME': acq_time.isoformat(),
+                'POLARIZATION': polarization,
+                'UNITS': 'radians',
+                'RANGE': '-π to +π',
+            }),
+        }
+        write_cog(phase_file, phase_bands, profile,
+                  band_descriptions={1: f"BIOMASS {polarization} - Phase"},
+                  global_meta={**metadata, 'BAND_TYPE': 'phase', 'UNITS': 'radians'})
+        print(f"✓ Created: {phase_file} ({phase_file.stat().st_size / 1e6:.1f} MB)")
+        written.append(phase_file)
 
-    write_cog(output_file, bands, profile,
-              band_descriptions=band_descriptions, global_meta=metadata)
-
-    print(f"\n✓ Created: {output_file}")
-    print(f"  Bands: {num_bands} ({band_desc})")
-    print(f"  Size: {output_file.stat().st_size / 1e6:.1f} MB")
+    return written
 
 
 def main():
@@ -384,8 +395,8 @@ def main():
     parser.add_argument('--polarization', default='HH',
                        choices=['HH', 'HV', 'VH', 'VV'],
                        help='Polarization to process (default: HH)')
-    parser.add_argument('--include-phase', action='store_true',
-                       help='Include phase band in output (default: amplitude only)')
+    parser.add_argument('--amp-only', action='store_true',
+                       help='Write amplitude only (default: also write a separate phase COG)')
 
     args = parser.parse_args()
 
@@ -433,6 +444,12 @@ def main():
         'PROCESSING': 'BIOMASS L1A SCS geocoded to custom grid using isce3',
     }
 
+    # Phase file: sibling of the amplitude output with a _phs suffix.
+    phase_file = None
+    if not args.amp_only:
+        stem = args.output.stem
+        phase_file = args.output.with_name(f"{stem}_phs{args.output.suffix}")
+
     write_biomass_cog(
         args.output,
         complex_data,
@@ -440,7 +457,7 @@ def main():
         acq_time,
         args.polarization,
         metadata,
-        include_phase=args.include_phase
+        phase_file=phase_file,
     )
 
     print("\n" + "=" * 70)

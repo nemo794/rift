@@ -35,6 +35,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import sys
 from pathlib import Path
 
@@ -147,13 +148,16 @@ def read_masked_complex(pol_data, mask_data, anomaly_data, pol_name, row_slice, 
 # --------------------------------------------------------------------------------------
 
 def _stream_placement(dst, pol_data, mask_data, anomaly_data, pol, geo_info,
-                      target_geogrid, ify, ifx, antialias, tile_size):
+                      target_geogrid, ify, ifx, antialias, tile_size, dst_phase=None):
     """
     Stream source tiles → detect → place into the chunk-aligned output canvas.
 
     Handles native (ify=ifx=1, target==native extent), same-spacing windowed placement,
     and integer downsampling (ify/ifx > 1). Source tiles are read as whole multiples of
     the decimation factor so boxcar multilook blocks are complete.
+
+    If ``dst_phase`` is given, the phase (``np.angle``, radians) of the same regridded
+    complex tile is written to that parallel dataset, co-registered with the amplitude.
     """
     src_tf = geo_info["transform"]
     tx = target_geogrid["x_posting"]
@@ -196,6 +200,7 @@ def _stream_placement(dst, pol_data, mask_data, anomaly_data, pol, geo_info,
                     out_c = c0 + col_off
 
                 amp = np.abs(tile).astype(np.float32)
+                phase = np.angle(tile).astype(np.float32) if dst_phase is not None else None
 
                 # Clip to the output canvas.
                 th, tw = amp.shape
@@ -206,32 +211,41 @@ def _stream_placement(dst, pol_data, mask_data, anomaly_data, pol, geo_info,
                 h = min(th - sr0, out_h - tr0)
                 w = min(tw - sc0, out_w - tc0)
                 if h > 0 and w > 0:
-                    dst.write(
-                        amp[sr0:sr0 + h, sc0:sc0 + w], 1,
-                        window=rasterio.windows.Window(tc0, tr0, w, h),
-                    )
+                    window = rasterio.windows.Window(tc0, tr0, w, h)
+                    dst.write(amp[sr0:sr0 + h, sc0:sc0 + w], 1, window=window)
+                    if dst_phase is not None:
+                        dst_phase.write(phase[sr0:sr0 + h, sc0:sc0 + w], 1, window=window)
                 pbar.update(1)
 
 
 def process_single_polarization(h5_file, pol, geo_info, output_file, tile_size=512,
                                  grid: AntarcticaGrid = ANTARCTICA_GRID, native=False,
-                                 method="nearest", antialias=True):
+                                 method="nearest", antialias=True, phase_file=None):
     """
-    Extract amplitude for one polarization, regrid onto the master grid, write a COG.
+    Extract amplitude for one polarization, regrid onto the master grid, write COG(s).
+
+    Amplitude and phase (if ``phase_file`` is given) are written to separate single-band
+    COGs from the same regridded complex tiles, mirroring the L1A abs/phase layout.
 
     Args:
         h5_file: Path to NISAR GSLC HDF5 file
         pol: Polarization name (e.g. 'HH')
         geo_info: Native georeferencing dict from extract_geotransform()
-        output_file: Output COG path
+        output_file: Output amplitude COG path
         tile_size: Streaming tile size (default 512, matches HDF5 chunks)
         grid: Target master grid (spacing defines output posting)
         native: If True, keep native 5×5 posting (snap extent only, no resample)
         method: Interpolation kernel for the general resample path
         antialias: Anti-alias before downsampling (recommended)
+        phase_file: Output phase COG path, or None to skip phase output
+
+    Returns:
+        list[Path]: COG(s) written (amplitude first, then phase if any)
     """
+    include_phase = phase_file is not None
     print(f"\nProcessing polarization: {pol}")
-    print(f"  Output: {output_file.name}")
+    print(f"  Output: {output_file.name}" +
+          (f" (+ {phase_file.name})" if include_phase else ""))
 
     if native:
         grid = grid.with_spacing(geo_info["x_spacing"], abs(geo_info["y_spacing"]))
@@ -255,6 +269,16 @@ def process_single_polarization(h5_file, pol, geo_info, output_file, tile_size=5
         dtype="float32", count=1, nodata=np.nan, blocksize=512,
     )
     temp_file = output_file.with_suffix(".temp.tif")
+    temp_phase = phase_file.with_suffix(".temp.tif") if include_phase else None
+
+    common_tags = dict(
+        SOURCE_FILE=Path(h5_file).name,
+        FREQUENCY="A",
+        POSTING=f"{target_geogrid['x_posting']}m × {target_geogrid['y_posting']}m",
+        GRID_EPSG=str(target_geogrid["epsg"]),
+        PROCESSING="NISAR GSLC freqA masked (complex domain), regridded to master grid",
+        MASK_LOGIC="Main mask: 0=invalid; Anomaly mask (HV only): >=1=invalid",
+    )
 
     with h5py.File(h5_file, "r") as h5f:
         pol_path = f"{FREQ_A}/{pol}"
@@ -273,10 +297,15 @@ def process_single_polarization(h5_file, pol, geo_info, output_file, tile_size=5
         can_stream = integer_factors and _is_integer(col_off / max(round(fx), 1)) \
             and _is_integer(row_off / max(round(fy), 1))
 
-        with rasterio.open(temp_file, "w", **profile) as dst:
+        with contextlib.ExitStack() as stack:
+            dst = stack.enter_context(rasterio.open(temp_file, "w", **profile))
+            dst_phase = (stack.enter_context(rasterio.open(temp_phase, "w", **profile))
+                         if include_phase else None)
+
             if can_stream:
                 _stream_placement(dst, pol_data, mask_data, anomaly_data, pol, geo_info,
-                                  target_geogrid, round(fy), round(fx), antialias, tile_size)
+                                  target_geogrid, round(fy), round(fx), antialias, tile_size,
+                                  dst_phase=dst_phase)
             else:
                 print("  ⚠ Fractional/upsample regrid — loading full complex array "
                       "(high memory).")
@@ -286,28 +315,39 @@ def process_single_polarization(h5_file, pol, geo_info, output_file, tile_size=5
                 regridded = regrid_complex(full, geo_info["transform"], target_geogrid,
                                            src_spacing, method=method, antialias=antialias)
                 dst.write(np.abs(regridded).astype(np.float32), 1)
+                if dst_phase is not None:
+                    dst_phase.write(np.angle(regridded).astype(np.float32), 1)
 
             dst.set_band_description(1, f"{pol} Amplitude")
-            dst.update_tags(1, POLARIZATION=pol, BAND_TYPE="amplitude")
-            dst.update_tags(
-                SOURCE_FILE=Path(h5_file).name,
-                FREQUENCY="A",
-                POSTING=f"{target_geogrid['x_posting']}m × {target_geogrid['y_posting']}m",
-                GRID_EPSG=str(target_geogrid["epsg"]),
-                PROCESSING="NISAR GSLC freqA amplitude, masked (complex domain), regridded to master grid",
-                MASK_LOGIC="Main mask: 0=invalid; Anomaly mask (HV only): >=1=invalid",
-            )
+            dst.update_tags(1, POLARIZATION=pol, BAND_TYPE="amplitude", UNITS="linear amplitude")
+            dst.update_tags(**common_tags)
+
+            if dst_phase is not None:
+                dst_phase.set_band_description(1, f"{pol} Phase")
+                dst_phase.update_tags(1, POLARIZATION=pol, BAND_TYPE="phase",
+                                      UNITS="radians", RANGE="-π to +π")
+                dst_phase.update_tags(**common_tags)
 
     print("  Converting to Cloud-Optimized GeoTIFF...")
     finalize_cog(temp_file, output_file)
     print(f"  ✓ Complete: {output_file.stat().st_size / 1e6:.1f} MB")
+    written = [output_file]
+    if include_phase:
+        finalize_cog(temp_phase, phase_file)
+        print(f"  ✓ Complete: {phase_file.stat().st_size / 1e6:.1f} MB")
+        written.append(phase_file)
+    return written
 
 
 def extract_amplitude_to_cogs(h5_file, output_dir=None, polarizations=None, tile_size=512,
                               grid: AntarcticaGrid = ANTARCTICA_GRID, native=False,
-                              method="nearest", antialias=True):
+                              method="nearest", antialias=True, amp_only=False):
     """
-    Extract amplitude from frequency-A polarizations → one regridded COG per polarization.
+    Extract from frequency-A polarizations → regridded COG(s) per polarization.
+
+    By default writes both an amplitude COG (``_<pol>_amp.tif``) and a co-registered
+    phase COG (``_<pol>_phs.tif``) per polarization; pass ``amp_only=True`` for amplitude
+    only.
 
     Args:
         h5_file: Path to NISAR GSLC HDF5 file
@@ -318,9 +358,10 @@ def extract_amplitude_to_cogs(h5_file, output_dir=None, polarizations=None, tile
         native: Keep native 5×5 posting (snap extent only)
         method: Interpolation kernel for the general resample path
         antialias: Anti-alias before downsampling
+        amp_only: Write amplitude only (default: also write a separate phase COG)
 
     Returns:
-        list[Path]: Created output files
+        list[Path]: Created output files (amplitude and, unless amp_only, phase)
     """
     print(f"Processing: {h5_file}")
 
@@ -357,12 +398,14 @@ def extract_amplitude_to_cogs(h5_file, output_dir=None, polarizations=None, tile
 
     for pol in pols_to_process:
         output_file = output_dir / f"{base_name}_{pol}_amp.tif"
+        phase_file = None if amp_only else output_dir / f"{base_name}_{pol}_phs.tif"
         try:
-            process_single_polarization(
+            written = process_single_polarization(
                 h5_file, pol, geo_info, output_file, tile_size,
                 grid=grid, native=native, method=method, antialias=antialias,
+                phase_file=phase_file,
             )
-            output_files.append(output_file)
+            output_files.extend(written)
         except Exception as e:
             print(f"  ✗ Failed to process {pol}: {e}")
             continue
@@ -392,6 +435,8 @@ def main():
                         help="Interpolation kernel for the general resample path")
     parser.add_argument("--no-antialias", action="store_true",
                         help="Disable anti-alias low-pass before downsampling (risky)")
+    parser.add_argument("--amp-only", action="store_true",
+                        help="Write amplitude only (default: also write a separate phase COG)")
 
     args = parser.parse_args()
 
@@ -405,7 +450,7 @@ def main():
         output_files = extract_amplitude_to_cogs(
             args.input, args.output_dir, args.polarizations, args.tile_size,
             grid=grid, native=args.native, method=args.resampling,
-            antialias=not args.no_antialias,
+            antialias=not args.no_antialias, amp_only=args.amp_only,
         )
         print(f"\n{'='*70}\nSUCCESS!\n{'='*70}")
         print(f"Created {len(output_files)} file(s):")
