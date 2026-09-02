@@ -80,10 +80,22 @@ rift/
 │   ├── pipeline.py             # run_biomass_end_to_end / run_nisar_end_to_end
 │   ├── validate.py             # geogrid alignment validation
 │   └── cli.py                  # unified `rift` CLI (jsonargparse)
+├── scripts/                    # Helper utilities (see below)
 ├── maap/{biomass_e2e,nisar_e2e}/      # MAAP DPS adapters (algorithm_config.yaml, run.sh, build-env.sh)
 ├── tests/                      # grid, nisar regrid, infer, pipeline
 └── docs/                       # grid system, resampling decision, workflows, pipeline, API
 ```
+
+## Helper Scripts
+
+The `scripts/` directory contains utility scripts for common preprocessing tasks:
+
+- **`download_dem_for_all_granules.py`** — Computes the union footprint of multiple BIOMASS 
+  granules and downloads a covering DEM via `sardem`. Useful for preparing a shared DEM for 
+  batch processing.
+
+These scripts are provided as-is for convenience and are not part of the core `rift` package. 
+They may not be actively maintained and should be reviewed before use in production workflows.
 
 ## Core Components
 
@@ -147,6 +159,34 @@ pytest tests/test_grid_system.py -v
 - [docs/GRID_SYSTEM.md](docs/GRID_SYSTEM.md): Grid system overview
 - [docs/API.md](docs/API.md): Complete API reference
 - [REPOSITORY_SUMMARY.md](REPOSITORY_SUMMARY.md): Repository setup details
+
+## Troubleshooting
+
+### macOS Finder previews crash / consume many GB of memory
+
+The amplitude and mask outputs are large (often >1 GB) DEFLATE-compressed float32 BigTIFF
+COGs. They are valid COGs and open efficiently in GDAL-based tools like QGIS, which use the
+embedded overviews. macOS Finder, however, renders previews through Apple's ImageIO/QuickLook,
+which reads the **full-resolution** primary image and ignores the COG overviews. Selecting a
+`.tif` in Finder (Preview pane, Gallery view, or icon thumbnails) can therefore decompress the
+entire raster into memory — many GB — and hang or crash the system.
+
+This is a macOS preview-rendering limitation, not a problem with the output files, and no COG
+creation option changes ImageIO's behavior. Work around it on the Finder side:
+
+- **Hide the Preview pane**: in Finder press **⌘⇧P** (View → Hide Preview). This is usually
+  the specific culprit.
+- **Use List (⌘2) or Column (⌘3) view** instead of Gallery view.
+- **Disable icon thumbnails for the folder**: select the folder, press **⌘J** (Show View
+  Options), uncheck **Show icon preview**, then optionally **Use as Defaults**.
+- **Scriptable / system-wide** — stop Finder showing the preview pane by default and clear any
+  wedged thumbnail cache:
+
+  ```bash
+  defaults write com.apple.finder ShowPreviewPane -bool false
+  killall Finder
+  qlmanage -r cache
+  ```
 
 ## Requirements
 
