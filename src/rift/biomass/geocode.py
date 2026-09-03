@@ -44,7 +44,7 @@ from biomass_reader import BiomassSlc
 from biomass_reader._constants import POLARIZATION_ORDER
 import isce3
 
-from rift.cogutil import base_profile, write_cog
+from rift.cogutil import base_profile, write_cog, finalize_cog
 from rift.biomass.geogrid import ensure_granule_dir
 
 
@@ -301,6 +301,182 @@ def geocode_biomass_granule(granule_path, dem_file, grid_params, polarization):
     return output, acq_time
 
 
+def geocode_biomass_to_cogs(granule_path, dem_file, grid_params, polarization,
+                            output_file, metadata, *, phase_file=None, block_rows=512):
+    """
+    Geocode one BIOMASS polarization to amplitude (and phase) COGs, block by block.
+
+    Memory-bounded alternative to ``geocode_biomass_granule`` + ``write_biomass_cog``:
+    instead of allocating the full geocoded grid in RAM (complex64, ~11 GB at a 3 m posting
+    over a typical swath), this geocodes the output ``block_rows`` at a time and streams
+    each block's amplitude/phase straight to disk. Peak memory is the (fixed-size) radar
+    SLC plus one output block, independent of the output resolution.
+
+    Blocks are geocoded independently: ``isce3.geocode.geocode_slc`` resolves every output
+    pixel via its own geo2rdr solve, so a full-width row-block sub-geogrid produces exactly
+    the same pixels as the whole-grid call — no seams, no halo/overlap needed.
+
+    Args:
+        granule_path: BIOMASS L1A SCS granule directory or .zip file
+        dem_file: DEM raster path
+        grid_params: Geogrid dict (x_min/x_max/y_min/y_max, x_posting/y_posting,
+            width/height, epsg) — the full output grid
+        polarization: Polarization to geocode (HH/HV/VH/VV)
+        output_file: Destination amplitude COG path
+        metadata: Dataset-level tag dict (as built by the pipeline / CLI)
+        phase_file: Destination phase COG path, or None to skip phase output
+        block_rows: Output rows geocoded per block (default 512, matches the 512-px COG
+            chunk height so window writes land on chunk boundaries)
+
+    Returns:
+        list[Path]: COG(s) written (amplitude first, then phase if any)
+    """
+    import contextlib
+
+    granule_path = Path(granule_path)
+    output_file = Path(output_file)
+    include_phase = phase_file is not None
+    if include_phase:
+        phase_file = Path(phase_file)
+
+    acq_time = extract_acquisition_time(granule_path)
+
+    print(f"\nProcessing: {granule_path.name}")
+    print(f"Acquisition: {acq_time.strftime('%Y-%m-%d %H:%M:%S UTC')}")
+
+    # Fail early: verify the provided DEM covers the (margined, chunk-aligned) output grid
+    # before doing any expensive SLC loading or geocoding.
+    print(f"  Checking DEM coverage of output grid...")
+    check_dem_covers_grid(dem_file, grid_params)
+
+    # Unzip if needed (shared with footprint computation)
+    granule_path = ensure_granule_dir(granule_path)
+
+    print(f"  Loading BIOMASS SLC...")
+    slc = BiomassSlc.from_dir(granule_path, polarization=polarization)
+    # Read the radar-coordinate SLC once and keep it resident: it is the fixed-size input
+    # (native scene dimensions), small relative to a fine-posting output grid.
+    radar_slc = slc.read_complex()
+
+    width = grid_params['width']
+    height = grid_params['height']
+
+    # Shared geocoding inputs (built once, reused for every block).
+    dem = isce3.io.Raster(str(dem_file))
+    dem_epsg = dem.get_epsg()
+    if dem_epsg != grid_params['epsg']:
+        print(f"\n  ⚠️  WARNING: DEM projection mismatch!")
+        print(f"    DEM EPSG: {dem_epsg}")
+        print(f"    Geogrid EPSG: {grid_params['epsg']}")
+        print(f"    This may cause issues. Consider reprojecting DEM to EPSG:{grid_params['epsg']}")
+
+    ellipsoid = isce3.core.make_projection(grid_params['epsg']).ellipsoid
+    image_grid_doppler = isce3.core.LUT2d()
+    invalid = np.complex64(np.nan + 1j * np.nan)
+
+    band_desc = "amplitude + phase (separate files)" if include_phase else "amplitude only"
+    n_blocks = (height + block_rows - 1) // block_rows
+    print(f"  Geocoding {width} × {height} grid in {n_blocks} block(s) of "
+          f"≤{block_rows} rows ({band_desc})...")
+
+    transform = Affine(
+        grid_params['x_posting'], 0.0, grid_params['x_min'],
+        0.0, -grid_params['y_posting'], grid_params['y_max']
+    )
+    profile = base_profile(
+        width=width, height=height, epsg=grid_params['epsg'], transform=transform,
+        dtype='float32', count=1, nodata=np.nan,
+    )
+
+    temp_amp = output_file.with_suffix('.temp.tif')
+    temp_phase = phase_file.with_suffix('.temp.tif') if include_phase else None
+
+    valid_count = 0
+    with contextlib.ExitStack() as stack:
+        dst_amp = stack.enter_context(rasterio.open(temp_amp, 'w', **profile))
+        dst_phase = (stack.enter_context(rasterio.open(temp_phase, 'w', **profile))
+                     if include_phase else None)
+
+        for r0 in range(0, height, block_rows):
+            n = min(block_rows, height - r0)
+
+            # Full-width sub-geogrid for this block: same lattice, shifted origin, n rows.
+            block_geogrid = isce3.product.GeoGridParameters(
+                start_x=grid_params['x_min'],
+                start_y=grid_params['y_max'] - r0 * grid_params['y_posting'],
+                spacing_x=grid_params['x_posting'],
+                spacing_y=-grid_params['y_posting'],
+                width=width,
+                length=n,
+                epsg=grid_params['epsg'],
+            )
+
+            output = np.full((n, width), invalid, dtype=np.complex64)
+            isce3.geocode.geocode_slc(
+                geo_data_blocks=[output],
+                rdr_data_blocks=[radar_slc],
+                dem_raster=dem,
+                radargrid=slc.radar_grid,
+                geogrid=block_geogrid,
+                orbit=slc.orbit,
+                native_doppler=slc.doppler,
+                image_grid_doppler=image_grid_doppler,
+                ellipsoid=ellipsoid,
+                threshold_geo2rdr=1.0e-8,
+                num_iter_geo2rdr=25,
+                flatten=True,
+                invalid_value=invalid,
+            )
+
+            window = rasterio.windows.Window(0, r0, width, n)
+            amp = np.abs(output).astype(np.float32)
+            valid_count += int(np.sum(~np.isnan(amp)))
+            dst_amp.write(amp, 1, window=window)
+            del amp
+
+            if include_phase:
+                phase = np.angle(output).astype(np.float32)
+                dst_phase.write(phase, 1, window=window)
+                del phase
+
+            del output
+
+        # Band descriptions + tags (mirrors write_biomass_cog).
+        global_meta = {'ACQUISITION_TIME': acq_time.isoformat(), **metadata}
+        dst_amp.set_band_description(1, f"BIOMASS {polarization} - Amplitude")
+        dst_amp.update_tags(1, BAND_TYPE='amplitude', ACQUISITION_TIME=acq_time.isoformat(),
+                            POLARIZATION=polarization, UNITS='linear amplitude')
+        dst_amp.update_tags(**{**global_meta, 'BAND_TYPE': 'amplitude'})
+
+        if include_phase:
+            dst_phase.set_band_description(1, f"BIOMASS {polarization} - Phase")
+            dst_phase.update_tags(1, BAND_TYPE='phase', ACQUISITION_TIME=acq_time.isoformat(),
+                                  POLARIZATION=polarization, UNITS='radians', RANGE='-π to +π')
+            dst_phase.update_tags(**{**global_meta, 'BAND_TYPE': 'phase', 'UNITS': 'radians'})
+
+    valid_percent = 100 * valid_count / (width * height)
+    print(f"  Valid pixels: {valid_count:,} ({valid_percent:.1f}%)")
+    if valid_count == 0:
+        print("\n  ⚠ WARNING: 0 valid pixels!")
+        print("  This usually means:")
+        print("    - DEM doesn't cover the geocoding grid")
+        print("    - Or radar data doesn't overlap with the grid")
+    elif valid_percent < 10:
+        print(f"\n  ⚠ WARNING: Low coverage ({valid_percent:.1f}%)")
+        print("  Check that DEM fully covers the geocoding grid")
+
+    print(f"\nWriting COG(s) ({band_desc}): {output_file}")
+    finalize_cog(temp_amp, output_file)
+    print(f"✓ Created: {output_file} ({output_file.stat().st_size / 1e6:.1f} MB)")
+    written = [output_file]
+    if include_phase:
+        finalize_cog(temp_phase, phase_file)
+        print(f"✓ Created: {phase_file} ({phase_file.stat().st_size / 1e6:.1f} MB)")
+        written.append(phase_file)
+
+    return written
+
+
 def write_biomass_cog(output_file, complex_data, grid_params, acq_time, polarization,
                       metadata, phase_file=None):
     """
@@ -321,6 +497,8 @@ def write_biomass_cog(output_file, complex_data, grid_params, acq_time, polariza
     Returns:
         list[Path]: Paths of the COG(s) written (amplitude first, then phase if any)
     """
+    import gc
+
     include_phase = phase_file is not None
     band_desc = "amplitude + phase (separate files)" if include_phase else "amplitude only"
     print(f"\nWriting COG(s) ({band_desc}): {output_file}")
@@ -357,6 +535,10 @@ def write_biomass_cog(output_file, complex_data, grid_params, acq_time, polariza
               global_meta={**metadata, 'BAND_TYPE': 'amplitude'})
     print(f"✓ Created: {output_file} ({output_file.stat().st_size / 1e6:.1f} MB)")
 
+    # Explicitly delete amplitude array to free memory before processing phase
+    del amplitude
+    gc.collect()
+
     written = [output_file]
 
     if include_phase:
@@ -374,6 +556,11 @@ def write_biomass_cog(output_file, complex_data, grid_params, acq_time, polariza
                   band_descriptions={1: f"BIOMASS {polarization} - Phase"},
                   global_meta={**metadata, 'BAND_TYPE': 'phase', 'UNITS': 'radians'})
         print(f"✓ Created: {phase_file} ({phase_file.stat().st_size / 1e6:.1f} MB)")
+
+        # Explicitly delete phase array to free memory
+        del phase
+        gc.collect()
+
         written.append(phase_file)
 
     return written
@@ -420,19 +607,12 @@ def main():
     # Step 1: Load geogrid parameters
     grid_params = load_geogrid_params(args.geogrid)
 
-    # Step 2: Geocode BIOMASS granule
+    # Step 2: Geocode BIOMASS granule (block-wise) directly to COG(s)
     print("\n" + "=" * 70)
     print("GEOCODING BIOMASS GRANULE")
     print("=" * 70)
 
-    complex_data, acq_time = geocode_biomass_granule(
-        args.biomass_granule,
-        args.dem,
-        grid_params,
-        args.polarization
-    )
-
-    # Step 3: Write COG
+    acq_time = extract_acquisition_time(args.biomass_granule)
     metadata = {
         'GEOGRID_SOURCE': str(args.geogrid.name),
         'GRID_EPSG': str(grid_params['epsg']),
@@ -450,12 +630,12 @@ def main():
         stem = args.output.stem
         phase_file = args.output.with_name(f"{stem}_phs{args.output.suffix}")
 
-    write_biomass_cog(
-        args.output,
-        complex_data,
+    geocode_biomass_to_cogs(
+        args.biomass_granule,
+        args.dem,
         grid_params,
-        acq_time,
         args.polarization,
+        args.output,
         metadata,
         phase_file=phase_file,
     )
