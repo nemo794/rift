@@ -77,11 +77,12 @@ def test_config_records_resolved_params(monkeypatch):
     import json
     with tempfile.TemporaryDirectory() as d:
         d = Path(d)
-        pipeline.run_nisar_end_to_end(Path("g.h5"), d, x_spacing=5, y_spacing=40,
+        pipeline.run_nisar_end_to_end(Path("g.h5"), d,
                                       threshold=0.3, keep_intermediates=False, pols=["HH"])
         cfg = json.loads((d / "nisar_e2e_config.json").read_text())
         assert cfg["workflow"] == "nisar-e2e"
-        assert cfg["y_spacing"] == 40
+        # NISAR always uses the shared 5×5 m master grid (no spacing options).
+        assert cfg["x_spacing"] == 5 and cfg["y_spacing"] == 5
         assert cfg["threshold"] == 0.3
 
 

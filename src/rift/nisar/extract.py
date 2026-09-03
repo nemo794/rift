@@ -1,35 +1,33 @@
 #!/usr/bin/env python3
 """
-Extract amplitude from a NISAR GSLC HDF5 file and regrid onto the master grid.
+Extract amplitude from a NISAR GSLC HDF5 file and place it onto the master grid.
 
 Extracts all **frequency A** polarization layers (HH, HV, VV, VH) — frequency B is
-ignored — computes amplitude (phase discarded), applies masks, snaps/resamples onto the
-Antarctica master grid, and writes one Cloud-Optimized GeoTIFF per polarization.
+ignored — applies masks in the complex domain, places the samples onto the Antarctica
+master grid, computes amplitude, and writes one Cloud-Optimized GeoTIFF per polarization.
 
-Signal-processing rules (see docs/GRID_RESAMPLING_DECISION.md, docs/NISAR_WORKFLOW.md):
-    * Masks are applied to the **complex** samples (set to NaN) *before* detection, and
-      resampling happens in the complex domain — amplitude ``|·|`` is taken last.
-    * Any downsampled axis is anti-alias filtered (boxcar multilook) before decimation.
+The master grid is 5×5 m in EPSG:3031. NISAR pixel edges already lie on that 5 m lattice,
+so placement is **lossless**: native complex samples are copied into a chunk-aligned canvas
+at an integer pixel offset, with the fill border padded to a whole number of 512×512 chunks
+(exact co-registration with BIOMASS). There is **no resampling, no interpolation, and no
+subpixel shift** — if a granule's origin does not land on an integer master-grid pixel
+offset, this raises ``ValueError`` rather than resampling
+(see docs/GRID_RESAMPLING_DECISION.md, docs/NISAR_WORKFLOW.md).
+
+Detection rule: masking and placement operate on the **complex** samples; amplitude ``|·|``
+is taken last (detecting before placement would corrupt speckle statistics).
 
 Masking logic:
     1. Main mask (frequencyA/mask): 0 = invalid → NaN (all polarizations).
     2. Anomaly mask (frequencyA/inputDataExceptionMask): applied ONLY to HV,
        >= 1 = invalid → NaN.
 
-Grid modes:
-    * Default: target = master grid at 5×5 m. NISAR pixel edges already lie on the 5 m
-      lattice, so this is a lossless windowed placement into a chunk-aligned canvas
-      (exact co-registration with BIOMASS), no interpolation.
-    * ``native=True``: keep 5×5 native posting, snap the extent to chunk boundaries only.
-    * Coarser target spacing (e.g. 5×40): integer boxcar multilook + windowed placement.
-
 Memory:
-    * Native / same-spacing / integer-downsample paths stream in 512-pixel source tiles.
-    * The general fractional/upsample path loads the full complex array (warns first).
+    * Placement streams in 512-pixel source tiles; the full array is never loaded.
 
 Usage:
     python -m rift.nisar.extract NISAR_L2_PR_GSLC_*.h5
-    python -m rift.nisar.extract NISAR_*.h5 --polarizations HH HV --native
+    python -m rift.nisar.extract NISAR_*.h5 --polarizations HH HV
 """
 
 from __future__ import annotations
@@ -46,11 +44,8 @@ from rasterio.transform import Affine
 from rift.cogutil import base_profile, finalize_cog
 from rift.grid import ANTARCTICA_GRID, AntarcticaGrid
 from rift.nisar.regrid import (
-    antialias_boxcar_complex,
     compute_nisar_target_geogrid,
-    decimation_factors,
     geogrid_transform,
-    regrid_complex,
     _is_integer,
 )
 
@@ -144,36 +139,27 @@ def read_masked_complex(pol_data, mask_data, anomaly_data, pol_name, row_slice, 
 
 
 # --------------------------------------------------------------------------------------
-# Streaming placement (native / same-spacing / integer downsample)
+# Streaming placement (lossless, integer pixel offset — no resampling)
 # --------------------------------------------------------------------------------------
 
 def _stream_placement(dst, pol_data, mask_data, anomaly_data, pol, geo_info,
-                      target_geogrid, ify, ifx, antialias, tile_size, dst_phase=None):
+                      target_geogrid, row_off, col_off, tile_size, dst_phase=None):
     """
     Stream source tiles → detect → place into the chunk-aligned output canvas.
 
-    Handles native (ify=ifx=1, target==native extent), same-spacing windowed placement,
-    and integer downsampling (ify/ifx > 1). Source tiles are read as whole multiples of
-    the decimation factor so boxcar multilook blocks are complete.
+    Lossless windowed placement: each masked complex tile is copied to the target canvas
+    at the integer pixel offset (``row_off``, ``col_off``). No resampling or interpolation.
 
-    If ``dst_phase`` is given, the phase (``np.angle``, radians) of the same regridded
-    complex tile is written to that parallel dataset, co-registered with the amplitude.
+    If ``dst_phase`` is given, the phase (``np.angle``, radians) of the same complex tile
+    is written to that parallel dataset, co-registered with the amplitude.
     """
-    src_tf = geo_info["transform"]
-    tx = target_geogrid["x_posting"]
-    ty = target_geogrid["y_posting"]
     height, width = pol_data.shape
-
-    # Integer pixel offset of the decimated source origin within the target canvas.
-    col_off = int(round((src_tf.c - target_geogrid["x_min"]) / tx))
-    row_off = int(round((target_geogrid["y_max"] - src_tf.f) / ty))
 
     out_h = target_geogrid["height"]
     out_w = target_geogrid["width"]
 
-    # Source tile step is a whole number of output pixels (multiple of the factor).
-    step_r = tile_size * ify
-    step_c = tile_size * ifx
+    step_r = tile_size
+    step_c = tile_size
     n_tiles_y = (height + step_r - 1) // step_r
     n_tiles_x = (width + step_c - 1) // step_c
 
@@ -188,16 +174,8 @@ def _stream_placement(dst, pol_data, mask_data, anomaly_data, pol, geo_info,
                 tile = read_masked_complex(pol_data, mask_data, anomaly_data, pol,
                                            slice(r0, r1), slice(c0, c1))
 
-                if ify > 1 or ifx > 1:
-                    if antialias:
-                        tile = antialias_boxcar_complex(tile, ify, ifx)
-                    else:
-                        tile = tile[::ify, ::ifx]
-                    out_r = r0 // ify + row_off
-                    out_c = c0 // ifx + col_off
-                else:
-                    out_r = r0 + row_off
-                    out_c = c0 + col_off
+                out_r = r0 + row_off
+                out_c = c0 + col_off
 
                 amp = np.abs(tile).astype(np.float32)
                 phase = np.angle(tile).astype(np.float32) if dst_phase is not None else None
@@ -219,13 +197,14 @@ def _stream_placement(dst, pol_data, mask_data, anomaly_data, pol, geo_info,
 
 
 def process_single_polarization(h5_file, pol, geo_info, output_file, tile_size=512,
-                                 grid: AntarcticaGrid = ANTARCTICA_GRID, native=False,
-                                 method="nearest", antialias=True, phase_file=None):
+                                 grid: AntarcticaGrid = ANTARCTICA_GRID, phase_file=None):
     """
-    Extract amplitude for one polarization, regrid onto the master grid, write COG(s).
+    Extract amplitude for one polarization, place onto the master grid, write COG(s).
 
-    Amplitude and phase (if ``phase_file`` is given) are written to separate single-band
-    COGs from the same regridded complex tiles, mirroring the L1A abs/phase layout.
+    Placement is lossless: masked complex tiles are copied into a chunk-aligned canvas at
+    an integer pixel offset (no resampling/interpolation). Amplitude and phase (if
+    ``phase_file`` is given) are written to separate single-band COGs from the same complex
+    tiles, mirroring the L1A abs/phase layout.
 
     Args:
         h5_file: Path to NISAR GSLC HDF5 file
@@ -233,35 +212,42 @@ def process_single_polarization(h5_file, pol, geo_info, output_file, tile_size=5
         geo_info: Native georeferencing dict from extract_geotransform()
         output_file: Output amplitude COG path
         tile_size: Streaming tile size (default 512, matches HDF5 chunks)
-        grid: Target master grid (spacing defines output posting)
-        native: If True, keep native 5×5 posting (snap extent only, no resample)
-        method: Interpolation kernel for the general resample path
-        antialias: Anti-alias before downsampling (recommended)
+        grid: Target master grid (default 5×5 m, shared with BIOMASS)
         phase_file: Output phase COG path, or None to skip phase output
 
     Returns:
         list[Path]: COG(s) written (amplitude first, then phase if any)
+
+    Raises:
+        ValueError: if the granule origin does not land on an integer master-grid pixel
+            offset (would require a subpixel shift, which is forbidden — no resampling).
     """
     include_phase = phase_file is not None
     print(f"\nProcessing polarization: {pol}")
     print(f"  Output: {output_file.name}" +
           (f" (+ {phase_file.name})" if include_phase else ""))
 
-    if native:
-        grid = grid.with_spacing(geo_info["x_spacing"], abs(geo_info["y_spacing"]))
-
     target_geogrid = compute_nisar_target_geogrid(
         geo_info["transform"], geo_info["width"], geo_info["height"], grid=grid
     )
     target_tf = geogrid_transform(target_geogrid)
 
-    src_spacing = (geo_info["x_spacing"], abs(geo_info["y_spacing"]))
-    fy, fx = decimation_factors(src_spacing, (target_geogrid["x_posting"],
-                                              target_geogrid["y_posting"]))
-    integer_factors = _is_integer(fy) and _is_integer(fx) and fy >= 1 and fx >= 1
-
     print(f"  Target grid: {target_geogrid['width']} x {target_geogrid['height']} px "
           f"@ {target_geogrid['x_posting']}×{target_geogrid['y_posting']} m")
+
+    # Pixel offset of the source origin within the target canvas. NISAR pixel edges lie on
+    # the 5 m master lattice, so this must be integer; otherwise placement would require a
+    # subpixel shift, which is forbidden.
+    col_off_f = (geo_info["transform"].c - target_geogrid["x_min"]) / target_geogrid["x_posting"]
+    row_off_f = (target_geogrid["y_max"] - geo_info["transform"].f) / target_geogrid["y_posting"]
+    if not (_is_integer(col_off_f) and _is_integer(row_off_f)):
+        raise ValueError(
+            f"NISAR granule origin does not align to the master grid: pixel offset "
+            f"(row={row_off_f:.6f}, col={col_off_f:.6f}) is not integer. Lossless "
+            f"placement requires an integer offset; no resampling is performed."
+        )
+    row_off = int(round(row_off_f))
+    col_off = int(round(col_off_f))
 
     profile = base_profile(
         width=target_geogrid["width"], height=target_geogrid["height"],
@@ -276,7 +262,7 @@ def process_single_polarization(h5_file, pol, geo_info, output_file, tile_size=5
         FREQUENCY="A",
         POSTING=f"{target_geogrid['x_posting']}m × {target_geogrid['y_posting']}m",
         GRID_EPSG=str(target_geogrid["epsg"]),
-        PROCESSING="NISAR GSLC freqA masked (complex domain), regridded to master grid",
+        PROCESSING="NISAR GSLC freqA masked (complex domain), placed on master grid (lossless)",
         MASK_LOGIC="Main mask: 0=invalid; Anomaly mask (HV only): >=1=invalid",
     )
 
@@ -291,32 +277,14 @@ def process_single_polarization(h5_file, pol, geo_info, output_file, tile_size=5
         if anomaly_data is None and pol == "HV":
             print("  Warning: inputDataExceptionMask not found, skipping anomaly mask")
 
-        # Check the source origin lands on integer output pixels (windowed placement OK).
-        col_off = (geo_info["transform"].c - target_geogrid["x_min"]) / target_geogrid["x_posting"]
-        row_off = (target_geogrid["y_max"] - geo_info["transform"].f) / target_geogrid["y_posting"]
-        can_stream = integer_factors and _is_integer(col_off / max(round(fx), 1)) \
-            and _is_integer(row_off / max(round(fy), 1))
-
         with contextlib.ExitStack() as stack:
             dst = stack.enter_context(rasterio.open(temp_file, "w", **profile))
             dst_phase = (stack.enter_context(rasterio.open(temp_phase, "w", **profile))
                          if include_phase else None)
 
-            if can_stream:
-                _stream_placement(dst, pol_data, mask_data, anomaly_data, pol, geo_info,
-                                  target_geogrid, round(fy), round(fx), antialias, tile_size,
-                                  dst_phase=dst_phase)
-            else:
-                print("  ⚠ Fractional/upsample regrid — loading full complex array "
-                      "(high memory).")
-                full = read_masked_complex(pol_data, mask_data, anomaly_data, pol,
-                                           slice(0, geo_info["height"]),
-                                           slice(0, geo_info["width"]))
-                regridded = regrid_complex(full, geo_info["transform"], target_geogrid,
-                                           src_spacing, method=method, antialias=antialias)
-                dst.write(np.abs(regridded).astype(np.float32), 1)
-                if dst_phase is not None:
-                    dst_phase.write(np.angle(regridded).astype(np.float32), 1)
+            _stream_placement(dst, pol_data, mask_data, anomaly_data, pol, geo_info,
+                              target_geogrid, row_off, col_off, tile_size,
+                              dst_phase=dst_phase)
 
             dst.set_band_description(1, f"{pol} Amplitude")
             dst.update_tags(1, POLARIZATION=pol, BAND_TYPE="amplitude", UNITS="linear amplitude")
@@ -340,24 +308,20 @@ def process_single_polarization(h5_file, pol, geo_info, output_file, tile_size=5
 
 
 def extract_amplitude_to_cogs(h5_file, output_dir=None, polarizations=None, tile_size=512,
-                              grid: AntarcticaGrid = ANTARCTICA_GRID, native=False,
-                              method="nearest", antialias=True, amp_only=False):
+                              grid: AntarcticaGrid = ANTARCTICA_GRID, amp_only=False):
     """
-    Extract from frequency-A polarizations → regridded COG(s) per polarization.
+    Extract from frequency-A polarizations → master-grid COG(s) per polarization.
 
-    By default writes both an amplitude COG (``_<pol>_amp.tif``) and a co-registered
-    phase COG (``_<pol>_phs.tif``) per polarization; pass ``amp_only=True`` for amplitude
-    only.
+    Lossless placement onto the 5×5 m master grid (no resampling). By default writes both
+    an amplitude COG (``_<pol>_amp.tif``) and a co-registered phase COG (``_<pol>_phs.tif``)
+    per polarization; pass ``amp_only=True`` for amplitude only.
 
     Args:
         h5_file: Path to NISAR GSLC HDF5 file
         output_dir: Output directory (default: same as input file)
         polarizations: Polarizations to process (default: all available in freq A)
         tile_size: Streaming tile size (default 512)
-        grid: Target master grid (spacing defines output posting; default 5×5)
-        native: Keep native 5×5 posting (snap extent only)
-        method: Interpolation kernel for the general resample path
-        antialias: Anti-alias before downsampling
+        grid: Target master grid (default 5×5 m, shared with BIOMASS)
         amp_only: Write amplitude only (default: also write a separate phase COG)
 
     Returns:
@@ -402,8 +366,7 @@ def extract_amplitude_to_cogs(h5_file, output_dir=None, polarizations=None, tile
         try:
             written = process_single_polarization(
                 h5_file, pol, geo_info, output_file, tile_size,
-                grid=grid, native=native, method=method, antialias=antialias,
-                phase_file=phase_file,
+                grid=grid, phase_file=phase_file,
             )
             output_files.extend(written)
         except Exception as e:
@@ -424,17 +387,6 @@ def main():
                         help="Specific polarizations to process (default: all in freq A)")
     parser.add_argument("--tile-size", type=int, default=512,
                         help="Streaming tile size (default: 512)")
-    parser.add_argument("--x-spacing", type=float, default=5.0,
-                        help="Target grid X spacing in meters (default: 5)")
-    parser.add_argument("--y-spacing", type=float, default=5.0,
-                        help="Target grid Y spacing in meters (default: 5)")
-    parser.add_argument("--native", action="store_true",
-                        help="Keep native 5×5 posting (snap extent only)")
-    parser.add_argument("--resampling", default="nearest",
-                        choices=["nearest", "bilinear", "lanczos", "average"],
-                        help="Interpolation kernel for the general resample path")
-    parser.add_argument("--no-antialias", action="store_true",
-                        help="Disable anti-alias low-pass before downsampling (risky)")
     parser.add_argument("--amp-only", action="store_true",
                         help="Write amplitude only (default: also write a separate phase COG)")
 
@@ -444,13 +396,10 @@ def main():
         print(f"ERROR: Input file not found: {args.input}")
         return 1
 
-    grid = ANTARCTICA_GRID.with_spacing(args.x_spacing, args.y_spacing)
-
     try:
         output_files = extract_amplitude_to_cogs(
             args.input, args.output_dir, args.polarizations, args.tile_size,
-            grid=grid, native=args.native, method=args.resampling,
-            antialias=not args.no_antialias, amp_only=args.amp_only,
+            amp_only=args.amp_only,
         )
         print(f"\n{'='*70}\nSUCCESS!\n{'='*70}")
         print(f"Created {len(output_files)} file(s):")

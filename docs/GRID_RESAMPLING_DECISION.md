@@ -3,6 +3,15 @@
 Status: **active default = 5×5 m**. This file records *why*, so the default can be
 revisited later with the tradeoffs in front of us.
 
+> **NISAR is placement-only (current implementation).** Because NISAR GSLCs already sit on
+> the 5×5 m master lattice (see `BIOMASS_NISAR_Grid_Alignment_Proof.md`), the NISAR path
+> does a *lossless windowed placement* onto the master grid at an integer pixel offset — no
+> resampling, no interpolation, no subpixel shift. If a granule's origin is not on the
+> lattice, the extractor raises rather than resampling. The spacing/anti-alias tradeoffs
+> below are therefore **retained as design rationale** and still govern BIOMASS and any
+> future decision to change the shared spacing; they are not options exposed on the NISAR
+> path today. Choosing a non-5×5 NISAR grid would require reintroducing a resampling step.
+
 ## Context
 
 All products land on a single **master grid** in EPSG:3031 (Antarctic Polar
@@ -55,28 +64,32 @@ alignment is desired, **both sensors resample onto one shared grid.**
 - BIOMASS reaches 5×5 for free: ISCE3 geocodes the **complex** SLC directly onto the
   target grid (correct by construction), so the "upsampling" is just a fine geocode.
 
-### `--native` flag
+### `--native` flag (BIOMASS only)
 
-Opt out of the shared grid and use each sensor's natural posting:
+BIOMASS can opt out of the shared grid and use its natural **5×40 m** posting via
+`--native`. In that mode cross-sensor chunk alignment is **not** guaranteed (different
+spacing) — use only for single-sensor products or when downstream handles mixed grids.
 
-- BIOMASS → **5×40 m**
-- NISAR   → **5×5 m**
+NISAR has no `--native` (or spacing/resampling) option: its native posting **is** 5×5 m,
+which is the shared grid, so it is always placed there losslessly.
 
-In `--native` mode, cross-sensor chunk alignment is **not** guaranteed (different
-spacing). Use only for single-sensor products or when downstream handles mixed grids.
+## Two signal-processing rules (mandatory if any resampling is ever reintroduced)
 
-## Two signal-processing rules (mandatory, independent of grid choice)
+These rules governed the original NISAR resample path. The current NISAR path does no
+resampling (lossless placement only), so they do not apply to it today — but they remain
+binding for BIOMASS complex handling and for any future decision to resample NISAR onto a
+non-5×5 grid.
 
-1. **Resample NISAR in the complex domain, then detect.** `|·|` roughly doubles signal
+1. **Operate in the complex domain, then detect.** `|·|` roughly doubles signal
    bandwidth, so decimating the *detected* amplitude undersamples and aliases; and
-   interpolating detected amplitude corrupts speckle statistics. Resample the geocoded
-   complex GSLC, then take magnitude **last**. Keeps both sensors' amplitude statistics
+   interpolating detected amplitude corrupts speckle statistics. Any resampling must act on
+   the complex samples, taking magnitude **last**. Keeps both sensors' amplitude statistics
    consistent (BIOMASS is already complex-geocoded by ISCE3).
 
 2. **Anti-alias before downsampling any axis.** Any axis whose spacing increases
-   (e.g. NISAR 5→40 range) must be low-pass filtered (block-average / Lanczos) *before*
-   decimation. Nearest/bilinear alone will alias. The resampling-method parameter selects
-   the kernel but must not bypass the anti-alias step on downsampling paths.
+   (e.g. a hypothetical NISAR 5→40 range) must be low-pass filtered (block-average /
+   Lanczos) *before* decimation — nearest/bilinear alone will alias. A resampling-kernel
+   choice must never bypass the anti-alias step on a downsampling path.
 
 ## Revisiting later
 

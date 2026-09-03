@@ -15,10 +15,11 @@ Individual steps (for local development / debugging):
     nisar-infer   amplitude COG  → binary-mask COG (threshold placeholder)
     validate      Check geogrid JSON alignment to the master grid
 
-Grid spacing defaults to 5×5 m (shared BIOMASS/NISAR grid). ``--native`` uses per-sensor
-native posting (BIOMASS 5×40, NISAR 5×5); in native mode cross-sensor chunk alignment is
-not guaranteed. ``--keep-intermediates`` (e2e only, default off) keeps amplitude/phase COGs
-in the output directory instead of deleting them.
+Grid spacing defaults to 5×5 m (shared BIOMASS/NISAR grid). For BIOMASS, ``--native`` uses
+its native 5×40 posting (cross-sensor chunk alignment is then not guaranteed). NISAR is
+always placed losslessly onto the 5×5 m master grid — no resampling, no spacing/native
+options. ``--keep-intermediates`` (e2e only, default off) keeps amplitude/phase COGs in the
+output directory instead of deleting them.
 
 COG products default to a per-polarization amplitude COG (``_<pol>_amp.tif``) plus a
 co-registered phase COG (``_<pol>_phs.tif``, radians -π..π), mirroring the source L1A
@@ -60,13 +61,6 @@ def _build_parser() -> ArgumentParser:
     p = ArgumentParser(description="NISAR end-to-end: GSLC → amplitude COGs → mask COGs")
     p.add_argument("--gslc", type=Path, required=True, help="NISAR L2 GSLC HDF5 file")
     p.add_argument("--output", type=Path, required=True, help="Output directory")
-    p.add_argument("--x-spacing", type=float, default=5.0)
-    p.add_argument("--y-spacing", type=float, default=5.0)
-    p.add_argument("--native", action="store_true", help="Keep NISAR-native 5×5 (snap only)")
-    p.add_argument("--resampling", type=str, default="nearest",
-                   choices=["nearest", "bilinear", "lanczos", "average"])
-    p.add_argument("--no-antialias", action="store_true",
-                   help="Disable anti-alias low-pass before downsampling (risky)")
     p.add_argument("--threshold", type=float, default=0.5)
     p.add_argument("--pols", type=Optional[List[str]], default=None,
                    help="Polarizations (default: all freq-A)")
@@ -93,12 +87,6 @@ def _build_parser() -> ArgumentParser:
     p = ArgumentParser(description="NISAR GSLC → amplitude COGs (no inference)")
     p.add_argument("--gslc", type=Path, required=True)
     p.add_argument("--output", type=Path, required=True, help="Output directory")
-    p.add_argument("--x-spacing", type=float, default=5.0)
-    p.add_argument("--y-spacing", type=float, default=5.0)
-    p.add_argument("--native", action="store_true")
-    p.add_argument("--resampling", type=str, default="nearest",
-                   choices=["nearest", "bilinear", "lanczos", "average"])
-    p.add_argument("--no-antialias", action="store_true")
     p.add_argument("--pols", type=Optional[List[str]], default=None)
     p.add_argument("--amp-only", action="store_true",
                    help="Write amplitude only (default: also write a separate phase COG per pol)")
@@ -150,8 +138,6 @@ def _dispatch(argv: Optional[List[str]] = None) -> int:
         from rift.pipeline import run_nisar_end_to_end
         result = run_nisar_end_to_end(
             args.gslc, args.output,
-            x_spacing=args.x_spacing, y_spacing=args.y_spacing, native=args.native,
-            method=args.resampling, antialias=not args.no_antialias,
             threshold=args.threshold, pols=args.pols,
             keep_intermediates=args.keep_intermediates, amp_only=args.amp_only,
         )
@@ -171,11 +157,9 @@ def _dispatch(argv: Optional[List[str]] = None) -> int:
         _report_list(outs)
 
     elif cmd == "nisar2cog":
-        from rift.pipeline import nisar_to_cogs, _nisar_grid
-        grid = _nisar_grid(args.x_spacing, args.y_spacing)
-        outs = nisar_to_cogs(args.gslc, args.output, grid=grid, pols=args.pols,
-                             native=args.native, method=args.resampling,
-                             antialias=not args.no_antialias, amp_only=args.amp_only)
+        from rift.pipeline import nisar_to_cogs
+        outs = nisar_to_cogs(args.gslc, args.output, pols=args.pols,
+                             amp_only=args.amp_only)
         _report_list(outs)
 
     elif cmd in ("biomass-infer", "nisar-infer"):

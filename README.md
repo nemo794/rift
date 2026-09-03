@@ -10,11 +10,13 @@ inference to produce binary-mask COGs. It packages as two end-to-end MAAP DPS al
 ## What it does
 
 1. **Master grid** — a parameterized `AntarcticaGrid` (default **5×5 m**) that both sensors
-   snap to, so their 512×512 chunks co-register. (`--native` → BIOMASS 5×40, NISAR 5×5.)
+   snap to, so their 512×512 chunks co-register. (BIOMASS `--native` → 5×40; NISAR is always
+   placed on the 5×5 m grid.)
 2. **BIOMASS** — geocode an L1A SCS granule with ISCE3 (`geocode_slc`, complex → detect last)
    → amplitude COG per polarization.
-3. **NISAR** — extract frequency-A amplitude from a GSLC, regrid onto the master grid in the
-   **complex domain** with anti-aliasing → amplitude COG per polarization.
+3. **NISAR** — extract frequency-A amplitude from a GSLC and **place** it losslessly onto the
+   master grid (no resampling; NISAR pixel edges already lie on the 5 m lattice) → amplitude
+   COG per polarization.
 4. **Inference** — placeholder binary-threshold model: one amplitude COG → one binary-mask COG
    (to be replaced by the trained model).
 
@@ -46,8 +48,7 @@ rift nisar-e2e   --gslc NISAR_*GSLC*.h5 --output out/ --threshold 0.5
 
 # Individual steps (local dev/debug)
 rift biomass2cog --granule BIO_*.zip --dem dem.tif --output out/ --pols '[HH,HV]'
-rift nisar2cog   --gslc NISAR_*.h5 --output out/            # default 5×5
-rift nisar2cog   --gslc NISAR_*.h5 --output out/ --x-spacing 5 --y-spacing 40
+rift nisar2cog   --gslc NISAR_*.h5 --output out/            # lossless 5×5 placement
 rift biomass-infer --input amp.tif --output mask.tif --threshold 0.5
 rift validate --geogrids '[geogrid1.json,geogrid2.json]'
 ```
@@ -73,7 +74,7 @@ rift/
 ├── src/rift/
 │   ├── grid.py                 # AntarcticaGrid (parameterized spacing, default 5×5)
 │   ├── biomass/{geogrid,geocode}.py   # footprint→geogrid; ISCE3 geocode→amplitude COG
-│   ├── nisar/{extract,regrid}.py      # freqA amplitude+masks; complex regrid to grid
+│   ├── nisar/{extract,regrid}.py      # freqA amplitude+masks; lossless placement on grid
 │   ├── dem.py                  # ensure_dem() — provided DEM or sardem download
 │   ├── infer/threshold.py      # placeholder inference: amp COG → binary-mask COG
 │   ├── cogutil.py              # shared COG writer

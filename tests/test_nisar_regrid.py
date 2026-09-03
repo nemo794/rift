@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-Tests for NISAR complex-domain regridding (rift.nisar.regrid).
+Tests for NISAR master-grid placement (rift.nisar).
 
-Covers the three signal-processing guarantees:
-1. Anti-alias downsampling reduces amplitude variance (multilook / speckle reduction).
-2. Same-spacing placement is lossless and chunk-aligned (default 5×5 case).
-3. Target geogrids snap to master-grid chunk boundaries.
+The NISAR path is placement-only: no resampling, no interpolation, no subpixel shift.
+These tests cover the remaining guarantees:
+1. Target geogrids snap to master-grid chunk boundaries.
+2. An aligned granule places losslessly at an integer pixel offset.
+3. A fractionally-offset granule is rejected (ValueError) rather than resampled.
 """
 
 import sys
@@ -16,13 +17,15 @@ from rasterio.transform import Affine
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
+import pytest
+
 from rift.grid import ANTARCTICA_GRID
+from rift.nisar.extract import process_single_polarization
 from rift.nisar.regrid import (
-    antialias_boxcar_complex,
     bounds_from_transform,
     compute_nisar_target_geogrid,
-    decimation_factors,
-    regrid_complex,
+    geogrid_transform,
+    _is_integer,
 )
 
 
@@ -31,27 +34,11 @@ def _nisar_like_transform(x0=-1702077.5, y0=-130322.5, spacing=5.0):
     return Affine(spacing, 0.0, x0 - spacing / 2.0, 0.0, -spacing, y0 + spacing / 2.0)
 
 
-def test_antialias_reduces_variance():
-    rng = np.random.default_rng(42)
-    arr = (rng.standard_normal((40, 40)) + 1j * rng.standard_normal((40, 40))).astype(np.complex64)
-    decimated = antialias_boxcar_complex(arr, 4, 4)
-    assert decimated.shape == (10, 10)
-    # Multilook averaging reduces amplitude variance.
-    assert np.abs(decimated).var() < np.abs(arr).var()
-
-
-def test_antialias_beats_naive_decimation_variance():
-    rng = np.random.default_rng(1)
-    arr = (rng.standard_normal((40, 40)) + 1j * rng.standard_normal((40, 40))).astype(np.complex64)
-    aa = np.abs(antialias_boxcar_complex(arr, 4, 4)).var()
-    naive = np.abs(arr[::4, ::4]).var()
-    # Boxcar (anti-aliased) result is smoother than naive subsampling.
-    assert aa < naive
-
-
-def test_decimation_factors():
-    assert decimation_factors((5.0, 5.0), (5.0, 40.0)) == (8.0, 1.0)
-    assert decimation_factors((5.0, 5.0), (5.0, 5.0)) == (1.0, 1.0)
+def _pixel_offset(transform, geogrid):
+    """Integer-valued (row, col) offset of the source origin within the target canvas."""
+    col_off = (transform.c - geogrid["x_min"]) / geogrid["x_posting"]
+    row_off = (geogrid["y_max"] - transform.f) / geogrid["y_posting"]
+    return row_off, col_off
 
 
 def test_target_geogrid_chunk_aligned():
@@ -64,16 +51,53 @@ def test_target_geogrid_chunk_aligned():
     assert gg["height"] % 512 == 0
 
 
-def test_same_spacing_placement_lossless():
-    rng = np.random.default_rng(7)
-    arr = (rng.standard_normal((60, 60)) + 1j * rng.standard_normal((60, 60))).astype(np.complex64)
+def test_aligned_granule_has_integer_offset():
+    """An on-lattice granule places at an integer pixel offset — lossless placement."""
     tf = _nisar_like_transform()
     gg = compute_nisar_target_geogrid(tf, 60, 60, grid=ANTARCTICA_GRID)
-    out = regrid_complex(arr, tf, gg, (5.0, 5.0), method="nearest")
-    assert out.shape == (gg["height"], gg["width"])
-    # Exactly 60*60 valid samples, amplitude sum preserved (windowed placement).
-    assert np.sum(~np.isnan(out.real)) == 60 * 60
-    assert np.isclose(np.nansum(np.abs(out)), np.sum(np.abs(arr)), rtol=1e-4)
+    row_off, col_off = _pixel_offset(tf, gg)
+    assert _is_integer(row_off) and _is_integer(col_off)
+    # The whole native array fits inside the (expanded, chunk-snapped) canvas.
+    assert int(round(row_off)) >= 0 and int(round(col_off)) >= 0
+    assert int(round(row_off)) + 60 <= gg["height"]
+    assert int(round(col_off)) + 60 <= gg["width"]
+
+
+def test_fractional_offset_detected():
+    """A half-pixel-shifted granule yields a non-integer offset (must be rejected)."""
+    tf = _nisar_like_transform()
+    # Shift the origin by 2.5 m (half a pixel) off the 5 m lattice.
+    shifted = Affine(tf.a, 0.0, tf.c + 2.5, 0.0, tf.e, tf.f)
+    gg = compute_nisar_target_geogrid(shifted, 60, 60, grid=ANTARCTICA_GRID)
+    row_off, col_off = _pixel_offset(shifted, gg)
+    assert not (_is_integer(row_off) and _is_integer(col_off))
+
+
+def test_process_raises_on_fractional_offset(tmp_path):
+    """process_single_polarization must reject a misaligned granule before any resampling."""
+    shifted = Affine(5.0, 0.0, -1702080.0 + 2.5, 0.0, -5.0, -130320.0 + 2.5)
+    geo_info = {
+        "epsg": 3031,
+        "transform": shifted,
+        "width": 60,
+        "height": 60,
+        "x_spacing": 5.0,
+        "y_spacing": -5.0,
+    }
+    with pytest.raises(ValueError, match="does not align to the master grid"):
+        process_single_polarization(
+            "dummy.h5", "HH", geo_info, tmp_path / "out_HH_amp.tif",
+        )
+
+
+def test_geogrid_transform_roundtrip():
+    tf = _nisar_like_transform()
+    gg = compute_nisar_target_geogrid(tf, 60, 60, grid=ANTARCTICA_GRID)
+    target_tf = geogrid_transform(gg)
+    assert target_tf.a == gg["x_posting"]
+    assert target_tf.e == -gg["y_posting"]
+    assert target_tf.c == gg["x_min"]
+    assert target_tf.f == gg["y_max"]
 
 
 def test_bounds_from_transform():
@@ -88,4 +112,4 @@ if __name__ == "__main__":
         if name.startswith("test_") and callable(fn):
             fn()
             print(f"✓ {name}")
-    print("ALL NISAR REGRID TESTS PASSED")
+    print("ALL NISAR PLACEMENT TESTS PASSED")

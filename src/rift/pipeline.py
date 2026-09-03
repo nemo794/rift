@@ -38,11 +38,6 @@ def _biomass_grid(x_spacing: float, y_spacing: float, native: bool) -> Antarctic
     return ANTARCTICA_GRID.with_spacing(x_spacing, y_spacing)
 
 
-def _nisar_grid(x_spacing: float, y_spacing: float) -> AntarcticaGrid:
-    """NISAR target grid (native handling lives in the extractor's ``native`` flag)."""
-    return ANTARCTICA_GRID.with_spacing(x_spacing, y_spacing)
-
-
 # --------------------------------------------------------------------------------------
 # Per-step functions (always write their COGs; no keep/delete policy here)
 # --------------------------------------------------------------------------------------
@@ -115,20 +110,19 @@ def biomass_to_cogs(granule: Path, dem: Path, output_dir: Path, *,
 
 def nisar_to_cogs(gslc: Path, output_dir: Path, *,
                   grid: AntarcticaGrid = ANTARCTICA_GRID,
-                  pols: Optional[List[str]] = None, native: bool = False,
-                  method: str = "nearest", antialias: bool = True,
+                  pols: Optional[List[str]] = None,
                   amp_only: bool = False) -> List[Path]:
     """
-    Extract freq-A amplitude (and phase) and regrid a NISAR GSLC to COGs (per pol).
+    Extract freq-A amplitude (and phase) and place a NISAR GSLC onto COGs (per pol).
+
+    Lossless placement onto the 5×5 m master grid (no resampling); raises if the granule
+    origin does not align to the master-grid lattice.
 
     Args:
         gslc: Path to NISAR GSLC HDF5 file
         output_dir: Output directory for COG files
-        grid: Target grid (default: ANTARCTICA_GRID)
+        grid: Target grid (default: ANTARCTICA_GRID, 5×5 m)
         pols: Polarizations to process (default: None = all available polarizations)
-        native: Keep native 5×5 posting (snap extent only)
-        method: Interpolation kernel for resampling
-        antialias: Anti-alias before downsampling
         amp_only: Write amplitude only (default: also write a separate phase COG per pol)
 
     Returns:
@@ -138,8 +132,7 @@ def nisar_to_cogs(gslc: Path, output_dir: Path, *,
 
     return extract_amplitude_to_cogs(
         Path(gslc), output_dir=Path(output_dir), polarizations=pols,
-        grid=grid, native=native, method=method, antialias=antialias,
-        amp_only=amp_only,
+        grid=grid, amp_only=amp_only,
     )
 
 
@@ -267,27 +260,21 @@ def run_biomass_end_to_end(granule: Path, output_dir: Path, *,
 
 
 def run_nisar_end_to_end(gslc: Path, output_dir: Path, *,
-                         x_spacing: float = 5.0, y_spacing: float = 5.0,
-                         native: bool = False, method: str = "nearest",
-                         antialias: bool = True, threshold: float = 0.5,
+                         threshold: float = 0.5,
                          pols: Optional[List[str]] = None,
                          keep_intermediates: bool = False, amp_only: bool = False,
                          config: Optional[Dict] = None) -> Dict[str, List[Path]]:
     """
-    NISAR end-to-end: extract+regrid → amplitude COGs → threshold → mask COGs.
+    NISAR end-to-end: extract+place → amplitude COGs → threshold → mask COGs.
 
-    Masks always land in ``output_dir``. Amplitude (and phase) COGs land there only if
+    NISAR is placed losslessly onto the 5×5 m master grid (no resampling). Masks always
+    land in ``output_dir``. Amplitude (and phase) COGs land there only if
     ``keep_intermediates``. Inference always runs on the amplitude COGs only. Writes
     ``nisar_e2e_config.json`` to ``output_dir``.
 
     Args:
         gslc: Path to NISAR GSLC HDF5 file
         output_dir: Output directory for final products
-        x_spacing: Grid X spacing in meters (default: 5.0)
-        y_spacing: Grid Y spacing in meters (default: 5.0)
-        native: Keep native 5×5 posting (snap extent only)
-        method: Interpolation kernel for resampling (default: "nearest")
-        antialias: Anti-alias before downsampling (default: True)
         threshold: Threshold value for inference (default: 0.5)
         pols: Polarizations to process (default: None = all available)
         keep_intermediates: Keep amplitude/phase COGs in output_dir (default: False)
@@ -307,12 +294,12 @@ def run_nisar_end_to_end(gslc: Path, output_dir: Path, *,
         pols = read_polarizations_list(gslc)
         print(f"Processing all available polarizations: {pols}")
 
-    grid = _nisar_grid(x_spacing, y_spacing)
+    grid = ANTARCTICA_GRID  # NISAR always uses the shared 5×5 m master grid.
 
     resolved = {
         "workflow": "nisar-e2e", "gslc": str(gslc),
-        "x_spacing": grid.x_posting, "y_spacing": grid.y_posting, "native": native,
-        "resampling": method, "antialias": antialias, "threshold": threshold,
+        "x_spacing": grid.x_posting, "y_spacing": grid.y_posting,
+        "threshold": threshold,
         "pols": pols, "keep_intermediates": keep_intermediates, "amp_only": amp_only,
     }
     if config:
@@ -320,8 +307,7 @@ def run_nisar_end_to_end(gslc: Path, output_dir: Path, *,
 
     workdir = Path(tempfile.mkdtemp(prefix="rift_nisar_", dir=output_dir))
     try:
-        cogs = nisar_to_cogs(gslc, workdir, grid=grid, pols=pols, native=native,
-                             method=method, antialias=antialias, amp_only=amp_only)
+        cogs = nisar_to_cogs(gslc, workdir, grid=grid, pols=pols, amp_only=amp_only)
         # Inference runs on amplitude COGs only; phase is a passthrough product.
         amp_cogs = [c for c in cogs if c.name.endswith("_amp.tif")]
         masks = infer_cogs(amp_cogs, output_dir, threshold)

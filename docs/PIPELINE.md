@@ -30,9 +30,9 @@ flowchart TD
 ```mermaid
 flowchart TD
     N[NISAR L2 GSLC granule] --> NX[read freqA + geometry]
-    G[Master grid<br/>EPSG:3031, 512×512, default 5×5] --> NR
-    NX --> NR[regrid complex<br/>anti-alias if downsampling]
-    NR --> NA[detect + mask: amplitude COG per pol]
+    G[Master grid<br/>EPSG:3031, 512×512, 5×5] --> NR
+    NX --> NR[mask + place complex<br/>lossless, integer offset]
+    NR --> NA[detect: amplitude COG per pol]
     NA --> I[threshold placeholder<br/>1 COG → 1 mask COG]
     I --> M[binary mask COGs → output/]
     NA -. keep-intermediates .-> M
