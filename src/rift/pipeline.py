@@ -67,7 +67,7 @@ def biomass_to_cogs(granule: Path, dem: Path, output_dir: Path, *,
         List of paths to created COG files (amplitude and, unless amp_only, phase)
     """
     from rift.biomass.geogrid import compute_biomass_footprint, create_geogrid_params
-    from rift.biomass.geocode import geocode_biomass_granule, write_biomass_cog, read_available_polarizations
+    from rift.biomass.geocode import geocode_biomass_to_cogs, read_available_polarizations
 
     granule = Path(granule)
     output_dir = Path(output_dir)
@@ -91,20 +91,21 @@ def biomass_to_cogs(granule: Path, dem: Path, output_dir: Path, *,
     outputs = []
     base = granule.stem
     for pol in pols:
-        complex_data, acq_time = geocode_biomass_granule(granule, dem, geogrid, pol)
         out = output_dir / f"{base}_{pol}_amp.tif"
         phase_out = None if amp_only else output_dir / f"{base}_{pol}_phs.tif"
         metadata = {
             "GRID_EPSG": str(geogrid["epsg"]),
             "POSTING": f"{geogrid['x_posting']}m × {geogrid['y_posting']}m",
             "POLARIZATION": pol,
-            "ACQUISITION_TIME": acq_time.isoformat(),
             "BIOMASS_GRANULE": granule.name,
             "PROCESSING": "BIOMASS L1A SCS geocoded to master grid using isce3",
         }
-        written = write_biomass_cog(out, complex_data, geogrid, acq_time, pol, metadata,
-                                    phase_file=phase_out)
+        # Block-wise geocode+write: bounds peak memory to the radar SLC + one output block
+        # (never the full geocoded grid), so fine postings (e.g. 3 m) don't exhaust RAM.
+        written = geocode_biomass_to_cogs(granule, dem, geogrid, pol, out, metadata,
+                                          phase_file=phase_out)
         outputs.extend(written)
+
     return outputs
 
 

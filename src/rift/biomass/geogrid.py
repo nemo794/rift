@@ -184,11 +184,16 @@ def create_geogrid_params(bbox, margin_m=5000, snap_to_master_grid=True, grid=No
     # Print detailed info
     grid.print_geogrid_info(geogrid)
 
-    # Memory estimate
+    # Memory estimate. Geocoding is block-wise (rift.biomass.geocode.geocode_biomass_to_cogs),
+    # so peak RAM is one output row-block + the fixed-size radar SLC — NOT the full grid.
+    block_rows = 512  # matches the default block height in geocode_biomass_to_cogs
     total_pixels = geogrid['width'] * geogrid['height']
-    print(f"\nMemory estimate:")
-    print(f"  Complex64: {total_pixels * 8 / 1e9:.2f} GB")
-    print(f"  Float32 (amplitude or phase): {total_pixels * 4 / 1e9:.2f} GB")
+    block_pixels = geogrid['width'] * min(block_rows, geogrid['height'])
+    print(f"\nMemory estimate (block-wise geocode, {block_rows}-row blocks):")
+    print(f"  Per-block complex64: {block_pixels * 8 / 1e9:.2f} GB")
+    print(f"  Per-block float32 (amplitude or phase): {block_pixels * 4 / 1e9:.2f} GB")
+    print(f"  + radar SLC (fixed, ~native scene size) held resident")
+    print(f"  (Full-grid complex64 would be {total_pixels * 8 / 1e9:.2f} GB — avoided.)")
 
     return geogrid
 
