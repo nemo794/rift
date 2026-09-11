@@ -3,11 +3,11 @@ channels:
   - conda-forge
 dependencies:
   # Python version
-  - python=3.11
+  - python>=3.12          # isce3 0.25.17 requires Python 3.12+ (not compatible with 3.11)
 
   # Core SAR processing
-  - isce3>=0.25          # InSAR Scientific Computing Environment (BIOMASS geocoding engine)
-  - gdal>=3.8            # Geospatial Data Abstraction Library (COG driver)
+  - isce3>=0.25.17       # InSAR Scientific Computing Environment (BIOMASS geocoding engine)
+  - gdal>=3.13.3         # Geospatial Data Abstraction Library (COG driver)
   - libgdal-netcdf       # GDAL NetCDF driver (for ionosphere LUT files)
 
   # Geospatial libraries
