@@ -22,7 +22,6 @@ import argparse
 import os
 import subprocess
 import sys
-import tempfile
 from typing import List, Optional, Tuple
 
 DEFAULT_ASF_S3_CREDS_URL = "https://nisar.asf.earthdatacloud.nasa.gov/s3credentials"
@@ -182,7 +181,10 @@ def fetch_granule(args: argparse.Namespace, input_dir: str) -> str:
 def main() -> int:
     args = parse_args()
     os.makedirs(args.out_dir, exist_ok=True)
-    input_dir = tempfile.mkdtemp(prefix="nisar_input_")
+    # DPS convention: stage the granule into ./input (a real dir under the job workdir,
+    # not /tmp, so it shares the job's disk budget and mirrors the DPS layout).
+    input_dir = os.path.abspath("input")
+    os.makedirs(input_dir, exist_ok=True)
 
     gslc = fetch_granule(args, input_dir)
     size_mb = os.path.getsize(gslc) / (1 << 20)
