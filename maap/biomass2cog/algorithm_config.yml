@@ -1,0 +1,48 @@
+algorithm_name: rift-biomass2cog
+algorithm_version: maap-ogc-biomass2cog
+
+algorithm_description: >
+  ESA BIOMASS Level-1A SCS to per-polarization amplitude (and phase) Cloud-Optimized
+  GeoTIFFs on the Antarctica master grid (EPSG:3031, 5x5 m, 512x512 chunks). The worker
+  resolves the granule by STAC Item ID on the ESA MAAP catalogue, exchanges MAAP-managed
+  ESA credentials for an access token, and streams the full product zip over authenticated
+  HTTPS. It then runs rift biomass2cog, which geocodes the range-doppler SLCs with ISCE3
+  (DEM auto-downloaded via sardem) onto the shared 5x5 m master grid. No inference is run.
+
+code_repository: https://github.com/nemo794/rift
+
+run_command: rift/maap/biomass2cog/run.sh
+build_command: rift/maap/biomass2cog/build.sh
+
+# Built on MAAP's maap_base image (ships maap-py + the DPS credential plumbing that
+# MAAP().secrets relies on). The conda env (isce3 + biomass-reader + rift) is created
+# by build.sh at registration time.
+base_container_url: mas.maap-project.org/root/maap-workspaces/custom_images/maap_base:v5.0.0
+
+# Geocoding keeps the full radar SLC resident plus an output block; bump vs nisar2cog.
+ram_min: 32
+cores_min: 8
+outdir_max: 50
+
+inputs:
+  - name: item_id
+    label: item_id
+    doc: ESA BIOMASS Level-1A SCS STAC Item ID (collection BiomassLevel1a).
+    type: string
+    default: ""
+
+  - name: pols
+    label: pols
+    doc: Comma-separated polarizations to geocode. Default is all four.
+    type: string
+    default: "HH,HV,VH,VV"
+
+  - name: amp_only
+    label: amp_only
+    doc: "true|false. When true, skip the per-pol phase COGs and write amplitude only."
+    type: string
+    default: "false"
+
+outputs:
+  - name: out
+    type: Directory
