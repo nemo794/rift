@@ -36,4 +36,6 @@ jobs:
           deploy-app-pack: true
           app-pack-register-endpoint: https://api.maap-project.org/api/ogc/processes
         env:
-          MAAP_TOKEN: ${{ secrets.MAAP_TOKEN }}
+          # The generator's deploy script requires an env var named MAAP_TOKEN; source it
+          # from the repo secret (named NASAMAAP here).
+          MAAP_TOKEN: ${{ secrets.NASAMAAP }}
