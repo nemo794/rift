@@ -83,7 +83,7 @@ s:contributor:
   s:name: Samantha C. Niemoeller
 s:citation: https://github.com/nemo794/rift.git
 s:codeRepository: https://github.com/nemo794/rift.git
-s:commitHash: 2145a43b1257831791862cdc6ed0d8ca83b4b285
+s:commitHash: a7ab5cb5449838c693633dedde097f782424cbc6
 s:dateCreated: 2026-09-23
 s:license: https://raw.githubusercontent.com/nemo794/rift/main/LICENSE-BSD-3-Clause.txt
 s:softwareVersion: 1.0.0
