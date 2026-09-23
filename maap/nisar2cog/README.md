@@ -75,9 +75,11 @@ Registration builds the image on MAAP's side (it can pull `maap_base`):
    `build_command: rift/maap/nisar2cog/build.sh` on `base_container_url: maap_base:v5.0.0`.
    Watch the Build & Deployment UI until the process is built/deployed.
 2. Confirm with `maap.list_algorithms()` (look for `rift-nisar2cog`), then submit jobs from
-   `notebooks/nisar2cog_dps_runner.ipynb`. The algorithm needs 16 GB / 4 CPU
-   (`ram_min: 16`, `cores_min: 4`), so submit to **`maap-dps-worker-16gb`** — the
-   `maap-dps-sandbox` queue (8 GB) is too small. Use `maap-dps-worker-32gb` for large granules.
+   `notebooks/nisar2cog_dps_runner.ipynb`. Test the plumbing on **`maap-dps-sandbox`** with a
+   single granule. The algorithm declares 16 GB / 4 CPU / 50 GB out (`ram_min: 16`,
+   `cores_min: 4`, `outdir_max: 50`), which exceeds sandbox's 8 GB / 10-min cap — so a full
+   granule may OOM or time out there. For real runs submit to **`maap-dps-worker-16gb`**
+   (or `-32gb` for large granules).
 
 ### Granule access on the worker
 The worker pulls NISAR from ASF directly — **no pre-staging to a bucket needed**. In `auto`

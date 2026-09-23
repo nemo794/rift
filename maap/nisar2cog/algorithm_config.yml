@@ -19,7 +19,7 @@ base_container_url: mas.maap-project.org/root/maap-workspaces/custom_images/maap
 
 ram_min: 16
 cores_min: 4
-outdir_max: 20
+outdir_max: 50
 
 inputs:
   - name: access_mode
