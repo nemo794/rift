@@ -110,7 +110,15 @@ def _build_parser() -> ArgumentParser:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    from rift.biomass.geocode import DemCoverageError
+    # DemCoverageError lives in the biomass subpackage, which pulls in biomass_reader
+    # (an isce3/BIOMASS-only dependency not installed for NISAR-only environments). Import
+    # it lazily so NISAR commands work without the biomass stack; if it can't be imported,
+    # there is no DemCoverageError to catch anyway.
+    try:
+        from rift.biomass.geocode import DemCoverageError
+    except ImportError:
+        DemCoverageError = ()  # empty tuple → matches nothing in `except`
+
     try:
         return _dispatch(argv)
     except DemCoverageError as e:
