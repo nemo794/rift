@@ -37,7 +37,8 @@ pip install . requests
 mkdir -p run_test/input run_test/output && cd run_test
 
 # 3a. Raw CLI check — stage a granule by hand into input/ first
-#     (asf_search download, or `aws s3 cp s3://.../NISAR_..._GSLC_....h5 input/`).
+#     (earthaccess.download(results[:1], "input") after earthaccess.login(),
+#      or `aws s3 cp s3://.../NISAR_..._GSLC_....h5 input/`).
 rift nisar2cog --gslc input/<granule>.h5 --output output/
 ls -la output/                      # expect <pol>_amplitude.tif (+ <pol>_phase.tif)
 gdalinfo output/*.tif | grep -E "EPSG|Size|Pixel"   # confirm EPSG:3031
