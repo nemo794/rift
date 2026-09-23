@@ -17,9 +17,9 @@ build_command: rift/maap/nisar2cog/build.sh
 # maap.aws.earthdata_s3_credentials() relies on). No isce3 is needed for the NISAR path.
 base_container_url: mas.maap-project.org/root/maap-workspaces/custom_images/maap_base:v5.0.0
 
-ram_min: 8
-cores_min: 2
-outdir_max: 20000
+ram_min: 16
+cores_min: 4
+outdir_max: 20
 
 inputs:
   - name: access_mode
