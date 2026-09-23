@@ -1,45 +1,75 @@
-algorithm_description: >
-  NISAR L2 GSLC to per-polarization amplitude (and phase) Cloud-Optimized GeoTIFFs on the
-  Antarctica master grid (EPSG:3031, 512x512 chunks). Frequency-A complex samples are masked
-  in the complex domain and placed losslessly (no resampling). No inference is run.
 algorithm_name: rift-nisar2cog
 algorithm_version: main
-keywords: nisar, gslc, sar, cog, antarctica
-code_repository: https://github.com/nemo794/rift.git
-citation: https://github.com/nemo794/rift.git
-author: Samantha C. Niemoeller
-contributor: Samantha C. Niemoeller
-license: https://raw.githubusercontent.com/nemo794/rift/main/LICENSE-BSD-3-Clause.txt
-release_notes: Initial OGC application package for the nisar2cog workflow.
 
-# The command MAAP invokes (CWL baseCommand). run.py is installed on PATH in the image.
-run_command: run.py
+algorithm_description: >
+  NISAR L2 GSLC to per-polarization amplitude (and phase) Cloud-Optimized GeoTIFFs on the
+  Antarctica master grid (EPSG:3031, 512x512 chunks). The worker resolves and downloads the
+  granule from ASF (S3-preferred, using MAAP/ASF temporary credentials; authenticated HTTPS
+  fallback), then runs rift nisar2cog. Frequency-A complex samples are masked in the complex
+  domain and placed losslessly (no resampling). No inference is run.
 
-# Resource hints (CWL ResourceRequirement). ram_min / outdir_max are in mebibytes.
-# Tune after the first real run against a full-resolution granule.
-ram_min: 6000
+code_repository: https://github.com/nemo794/rift
+
+run_command: rift/maap/nisar2cog/run.sh
+build_command: rift/maap/nisar2cog/build.sh
+
+# Built on MAAP's maap_base image (ships maap-py + the DPS credential plumbing that
+# maap.aws.earthdata_s3_credentials() relies on). No isce3 is needed for the NISAR path.
+base_container_url: mas.maap-project.org/root/maap-workspaces/custom_images/maap_base:v5.0.0
+
+ram_min: 8
 cores_min: 2
 outdir_max: 20000
 
-# Flat, named inputs (OGC drops positional args). Each name maps to a --<name> value CLI arg
-# that run.py parses.
 inputs:
-  - name: gslc_url
-    label: NISAR GSLC URL
-    doc: HTTPS or S3 URL to a NISAR L2 GSLC .h5 granule. Downloaded into ./input at runtime.
+  - name: access_mode
+    label: access_mode
+    doc: "auto | s3 | https. auto prefers S3 (worker is in us-west-2), falls back to HTTPS."
     type: string
-  - name: pols
-    label: Polarizations
-    doc: Comma-separated polarizations (e.g. HH,HV). Empty means all frequency-A pols.
-    type: string?
+    default: auto
+
+  - name: s3_href
+    label: s3_href
+    doc: Direct s3:// URL to the NISAR GSLC .h5 (preferred). If blank, resolved via CMR search.
+    type: string
     default: ""
+
+  - name: https_href
+    label: https_href
+    doc: Authenticated HTTPS URL to the NISAR GSLC .h5 (fallback). If blank, resolved via CMR.
+    type: string
+    default: ""
+
+  - name: short_name
+    label: short_name
+    doc: CMR collection short_name used when no href is supplied.
+    type: string
+    default: NISAR_L2_GSLC_PROVISIONAL_V1
+
+  - name: granule_index
+    label: granule_index
+    doc: Index into the CMR search results when resolving by short_name.
+    type: string
+    default: "0"
+
+  - name: asf_s3_creds_url
+    label: asf_s3_creds_url
+    doc: Endpoint that issues ASF temporary S3 credentials.
+    type: string
+    default: "https://nisar.asf.earthdatacloud.nasa.gov/s3credentials"
+
+  - name: pols
+    label: pols
+    doc: Comma-separated polarizations (e.g. HH,HV). Empty means all frequency-A pols.
+    type: string
+    default: ""
+
   - name: amp_only
-    label: Amplitude only
+    label: amp_only
     doc: "true|false. When true, skip the per-pol phase COGs and write amplitude only."
-    type: string?
+    type: string
     default: "false"
 
-# The output/ directory is collected and staged out (CWL glob: ./output*).
 outputs:
   - name: out
     type: Directory

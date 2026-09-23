@@ -1,21 +1,12 @@
-# Slim image for the rift nisar2cog OGC workflow.
+# Built on MAAP's maap_base image, which lives in the private mas.maap-project.org
+# registry (only MAAP's build infra can pull it) and ships maap-py plus the DPS
+# credential plumbing that maap.aws.earthdata_s3_credentials() relies on.
 #
-# nisar2cog uses only numpy/scipy/h5py/rasterio/pyproj/jsonargparse (GDAL is bundled in the
-# rasterio wheel), so no isce3 / conda is required -- this sidesteps the isce3 0.25.17 /
-# gdal 3.13.3 conda solve issues tracked in NASA-IMPACT/science-support#81.
-FROM python:3.12-slim
+# The conda env (rift + deps, no isce3) is created by build.sh at registration time.
+FROM mas.maap-project.org/root/maap-workspaces/custom_images/maap_base:v5.0.0
 
-# libexpat1 is needed by rasterio's bundled GDAL and is omitted from python:3.12-slim.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends libexpat1 \
-    && rm -rf /var/lib/apt/lists/*
+COPY . /opt/app
 
-# The build context is the repo root (the GitHub Action checks out the whole repo).
-COPY . /opt/rift
+RUN chmod +x /opt/app/rift/maap/nisar2cog/run.sh /opt/app/rift/maap/nisar2cog/build.sh
 
-# Install rift (pulls its runtime deps from pyproject.toml) plus requests for run.py.
-RUN pip install --no-cache-dir /opt/rift requests
-
-# OGC entrypoint on PATH; run_command in algorithm_config.yml is "run.py".
-COPY maap/nisar2cog/run.py /usr/local/bin/run.py
-RUN chmod +x /usr/local/bin/run.py
+ENTRYPOINT ["/opt/app/rift/maap/nisar2cog/run.sh"]
