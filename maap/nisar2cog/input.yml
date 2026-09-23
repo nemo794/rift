@@ -1,0 +1,7 @@
+# Sample job file for a local cwltool run:
+#   cwltool maap/nisar2cog/cwl_workflows/process.cwl maap/nisar2cog/input.yml
+# Replace gslc_url with a real NISAR L2 GSLC .h5 URL (must be reachable without auth, or
+# pre-download it and point at a file:// path).
+gslc_url: "https://example.com/path/to/NISAR_L2_PR_GSLC_XXXX.h5"
+pols: ""
+amp_only: "false"
