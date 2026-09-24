@@ -27,10 +27,11 @@ via `conda run -n crevasse` for the inference step.
 ### Baked model
 
 The large NISAR U-Net checkpoint (`unet_best.safetensors`, ~153 MB) exceeds GitHub's 100 MB
-limit and is **not** in the `nisar-crevasse` repo. `build.sh` fetches it from
-`my-public-bucket` with `aws s3 cp` (using the MAAP workspace / build-infra AWS
-credentials — the bucket is **not** anonymously readable over HTTPS, it returns 403) and
-places it at the exact nested path the predictor loads by default:
+limit and is **not** in the `nisar-crevasse` repo. `my-public-bucket` is **not** anonymously
+readable over HTTPS (it returns 403), so `build.sh` fetches the model with **boto3 using
+credentials** — MAAP workspace credentials (`maap.aws.workspace_bucket_credentials()`, always
+present on `maap_base`) first, then the default AWS credential chain — and places it at the
+exact nested path the predictor loads by default:
 
 ```
 <clone>/models/nisar/unet/unet_025_019_f421_meansoft_g3/unet_best.safetensors
@@ -38,9 +39,10 @@ places it at the exact nested path the predictor loads by default:
 
 Override the source with the `MODEL_S3_URI` env var; the default is
 `s3://maap-ops-workspace/shared/niemoell/crevasse_unet_models/nisar/unet_best.safetensors`.
-If the `aws` CLI isn't on PATH, `build.sh` falls back to `boto3` (in the geocoding env) with
-the same ambient credentials. The gate model (`gate_5m_freqA_2gran.joblib`, <100 MB) and the
-checkpoint's `.json` sidecar ship in the repo, so only the one safetensors file is fetched.
+The build **hard-fails** if the model is missing or empty after the fetch (and the crevasse
+sanity check re-asserts it loads), so a broken download can no longer pass as a successful
+build. The gate model (`gate_5m_freqA_2gran.joblib`, <100 MB) and the checkpoint's `.json`
+sidecar ship in the repo, so only the one safetensors file is fetched.
 
 ## Files
 

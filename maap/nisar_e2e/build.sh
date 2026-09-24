@@ -11,8 +11,9 @@
 #
 # and bakes the large NISAR U-Net checkpoint from my-public-bucket into the
 # cloned nisar-crevasse repo at the exact nested path its predictor loads by
-# default (unet_predict.py's DEFAULT_CHECKPOINT). No AWS creds needed: the model
-# is fetched over anonymous public HTTPS.
+# default (unet_predict.py's DEFAULT_CHECKPOINT). my-public-bucket is NOT
+# anonymously public (403 over HTTPS), so the model is pulled with credentials
+# (MAAP workspace creds first, then the default AWS chain) via boto3.
 ################################################################################
 set -euo pipefail
 
@@ -58,9 +59,8 @@ conda run -p "${CREVASSE_ENV_PREFIX}" pip install --no-cache-dir -e "${CREVASSE_
 # Bake the large NISAR U-Net checkpoint from my-public-bucket into the clone.
 # --------------------------------------------------------------------------------------
 # my-public-bucket = s3://maap-ops-workspace/shared/<username>/...  It is NOT anonymously
-# readable over HTTPS (returns 403), so fetch it with the workspace's MAAP AWS credentials
-# via `aws s3 cp` — the same credential context that lets `aws s3 cp s3://... .` work in a
-# MAAP workspace, and that MAAP's build infra runs under.
+# readable over HTTPS (returns 403), so fetch it with credentials via boto3: MAAP workspace
+# credentials (maap-py, always present on maap_base) first, then the default AWS chain.
 # Uploaded to: my-public-bucket/crevasse_unet_models/nisar/unet_best.safetensors
 MODEL_S3_URI="${MODEL_S3_URI:-s3://maap-ops-workspace/shared/niemoell/crevasse_unet_models/nisar/unet_best.safetensors}"
 # Must match unet_predict.py's DEFAULT_CHECKPOINT (models/nisar/unet/<run>/unet_best.safetensors).
@@ -68,42 +68,84 @@ MODEL_DEST="${CREVASSE_DIR}/models/nisar/unet/unet_025_019_f421_meansoft_g3/unet
 
 mkdir -p "$(dirname "${MODEL_DEST}")"
 echo "Fetching NISAR U-Net checkpoint: ${MODEL_S3_URI}"
-if command -v aws >/dev/null 2>&1; then
-  aws s3 cp "${MODEL_S3_URI}" "${MODEL_DEST}"
-else
-  # No aws CLI on PATH: fall back to boto3 (ships in the geocoding env) using the same
-  # ambient AWS credentials.
-  echo "aws CLI not found; falling back to boto3 in the rift_nisar2cog env."
-  conda run -p "${ENV_PREFIX}" python - "${MODEL_S3_URI}" "${MODEL_DEST}" <<'PY'
+
+# NOTE: write the fetcher to a real file and pass args — do NOT pipe a heredoc into
+# `conda run ... python -`. conda run does not forward stdin to the child, so `python -`
+# would read an empty program and silently no-op (the bug that shipped an empty model).
+FETCH_PY="$(mktemp /tmp/fetch_model.XXXXXX.py)"
+cat > "${FETCH_PY}" <<'PY'
 import sys, boto3
+from botocore.exceptions import ClientError
+
 uri, dest = sys.argv[1], sys.argv[2]
 assert uri.startswith("s3://"), uri
 bucket, key = uri[5:].split("/", 1)
-boto3.client("s3").download_file(bucket, key, dest)
-print(f"downloaded s3://{bucket}/{key} -> {dest}")
+
+
+def _maap_client():
+    """boto3 S3 client using MAAP workspace credentials (maap-py ships on maap_base)."""
+    from maap.maap import MAAP
+    c = MAAP().aws.workspace_bucket_credentials()["credentials"]
+    return boto3.client(
+        "s3",
+        aws_access_key_id=c["aws_access_key_id"],
+        aws_secret_access_key=c["aws_secret_access_key"],
+        aws_session_token=c["aws_session_token"],
+    )
+
+
+last = None
+for label, make in (("maap-workspace-creds", _maap_client),
+                    ("default-aws-chain", lambda: boto3.client("s3"))):
+    try:
+        print(f"  trying {label} ...", flush=True)
+        make().download_file(bucket, key, dest)
+        print(f"  downloaded via {label}: s3://{bucket}/{key} -> {dest}", flush=True)
+        sys.exit(0)
+    except Exception as exc:  # noqa: BLE001
+        last = exc
+        print(f"  {label} failed: {type(exc).__name__}: {exc}", flush=True)
+
+print(f"ERROR: could not download {uri}: {last}", file=sys.stderr)
+sys.exit(1)
 PY
+
+# Run in the geocoding env (has boto3 + maap-py). Fails the build (set -e) on nonzero exit.
+conda run -p "${ENV_PREFIX}" python "${FETCH_PY}" "${MODEL_S3_URI}" "${MODEL_DEST}"
+rm -f "${FETCH_PY}"
+
+# Hard-fail if the model is missing or empty (belt-and-suspenders around the fetch above).
+if [ ! -s "${MODEL_DEST}" ]; then
+  echo "ERROR: model not present after fetch: ${MODEL_DEST}" >&2
+  exit 1
 fi
 echo "  -> ${MODEL_DEST} ($(du -h "${MODEL_DEST}" | cut -f1))"
 
 conda clean -afy
 
 # --------------------------------------------------------------------------------------
-# Sanity checks
+# Sanity checks (write to files; never pipe via `conda run ... python -` — see note above)
 # --------------------------------------------------------------------------------------
-conda run -p "${ENV_PREFIX}" python - <<'PY'
+CHECK_GEO_PY="$(mktemp /tmp/check_geo.XXXXXX.py)"
+cat > "${CHECK_GEO_PY}" <<'PY'
 import rasterio, h5py, numpy, scipy, pyproj, s3fs, earthaccess
 import rift
 print("Geocoding env OK — rasterio", rasterio.__version__, "| h5py", h5py.__version__)
 PY
+conda run -p "${ENV_PREFIX}" python "${CHECK_GEO_PY}"
+rm -f "${CHECK_GEO_PY}"
 
-conda run -p "${CREVASSE_ENV_PREFIX}" python - <<'PY'
+CHECK_ML_PY="$(mktemp /tmp/check_ml.XXXXXX.py)"
+cat > "${CHECK_ML_PY}" <<'PY'
+import os
 import torch
 from crevasse.nisar.unet_predict import DEFAULT_CHECKPOINT
 p = str(DEFAULT_CHECKPOINT) + ".safetensors"
-import os
 assert os.path.exists(p), f"baked U-Net checkpoint missing at {p}"
 print("Crevasse env OK — torch", torch.__version__)
 print("U-Net checkpoint present:", p)
 PY
+conda run -p "${CREVASSE_ENV_PREFIX}" python "${CHECK_ML_PY}"
+rm -f "${CHECK_ML_PY}"
 
 echo "✓ rift nisar-e2e image ready (envs: rift_nisar2cog + crevasse; model baked)"
