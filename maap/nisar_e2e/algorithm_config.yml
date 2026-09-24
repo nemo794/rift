@@ -1,5 +1,5 @@
 algorithm_name: rift-nisar-e2e
-algorithm_version: maap-ogc-nisar-crevasse
+algorithm_version: main
 
 algorithm_description: >
   NISAR end-to-end: L2 GSLC to per-polarization amplitude COGs on the Antarctica master grid
