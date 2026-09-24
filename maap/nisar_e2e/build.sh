@@ -25,15 +25,29 @@ repo_root="$(cd "${basedir}/../.." && pwd -P)"
 chmod +x "${basedir}/run.sh" "${basedir}/build.sh"
 
 # --------------------------------------------------------------------------------------
-# Step 0 (FAIL EARLY): fetch the large NISAR U-Net checkpoint from my-public-bucket.
+# Env A: slim geocoding (rift nisar2cog, no isce3)
 # --------------------------------------------------------------------------------------
-# The credentialed S3 fetch is the most failure-prone step, so do it FIRST — before the two
-# conda solves and the clone — and stage it to a temp file. It is copied into the clone at
-# its final nested path once that exists (see "Bake the model" below).
+# Built first (it is the cheaper solve) so the credentialed model fetch below can run inside
+# it — it ships boto3 + maap-py, and the base maap_base env does not.
+ENV_PREFIX="/opt/conda/envs/rift_nisar2cog"
+
+conda env remove -p "${ENV_PREFIX}" -y || true
+conda env create -f "${basedir}/env.yml" --prefix "${ENV_PREFIX}"
+
+# Install rift itself into the geocoding env.
+conda run -p "${ENV_PREFIX}" pip install --no-cache-dir "${repo_root}"
+
+# --------------------------------------------------------------------------------------
+# Fetch the large NISAR U-Net checkpoint from my-public-bucket (FAIL EARLY).
+# --------------------------------------------------------------------------------------
+# The credentialed S3 fetch is the most failure-prone step, so do it right after the cheap
+# geocoding env — before the heavy crevasse solve and the clone — and stage it to a temp
+# file. It is copied into the clone at its final nested path once that exists (see "Bake the
+# model" below).
 #
-# Run with the base maap_base python (ships maap-py + boto3); the geocoding env does not
-# exist yet. my-public-bucket is NOT anonymously public (403 over HTTPS), so fetch with
-# credentials: MAAP workspace credentials first, then the default AWS chain.
+# my-public-bucket is NOT anonymously public (403 over HTTPS), so fetch with credentials:
+# MAAP workspace credentials first, then the default AWS chain. Runs in the geocoding env
+# (has boto3 + maap-py).
 MODEL_S3_URI="${MODEL_S3_URI:-s3://maap-ops-workspace/shared/niemoell/crevasse_unet_models/nisar/unet_best.safetensors}"
 MODEL_STAGED="$(mktemp /tmp/unet_best.XXXXXX.safetensors)"
 
@@ -79,27 +93,16 @@ print(f"ERROR: could not download {uri}: {last}", file=sys.stderr)
 sys.exit(1)
 PY
 
-# Base env python (fails the build via set -e on nonzero exit).
-python "${FETCH_PY}" "${MODEL_S3_URI}" "${MODEL_STAGED}"
+# Run in the geocoding env (has boto3 + maap-py). Fails the build (set -e) on nonzero exit.
+conda run -p "${ENV_PREFIX}" python "${FETCH_PY}" "${MODEL_S3_URI}" "${MODEL_STAGED}"
 rm -f "${FETCH_PY}"
 
-# Hard-fail immediately if the model is missing or empty — before any expensive build step.
+# Hard-fail immediately if the model is missing or empty — before the heavy crevasse solve.
 if [ ! -s "${MODEL_STAGED}" ]; then
   echo "ERROR: model not present after fetch: ${MODEL_STAGED}" >&2
   exit 1
 fi
 echo "  staged -> ${MODEL_STAGED} ($(du -h "${MODEL_STAGED}" | cut -f1))"
-
-# --------------------------------------------------------------------------------------
-# Env A: slim geocoding (rift nisar2cog, no isce3)
-# --------------------------------------------------------------------------------------
-ENV_PREFIX="/opt/conda/envs/rift_nisar2cog"
-
-conda env remove -p "${ENV_PREFIX}" -y || true
-conda env create -f "${basedir}/env.yml" --prefix "${ENV_PREFIX}"
-
-# Install rift itself into the geocoding env.
-conda run -p "${ENV_PREFIX}" pip install --no-cache-dir "${repo_root}"
 
 # --------------------------------------------------------------------------------------
 # Env B: nisar-crevasse gate + U-Net inference (torch)

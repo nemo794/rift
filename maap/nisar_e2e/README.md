@@ -29,11 +29,12 @@ via `conda run -n crevasse` for the inference step.
 The large NISAR U-Net checkpoint (`unet_best.safetensors`, ~153 MB) exceeds GitHub's 100 MB
 limit and is **not** in the `nisar-crevasse` repo. `my-public-bucket` is **not** anonymously
 readable over HTTPS (it returns 403), so `build.sh` fetches the model with **boto3 using
-credentials** — MAAP workspace credentials (`maap.aws.workspace_bucket_credentials()`, always
-present on `maap_base`) first, then the default AWS credential chain. This fetch is the
-**first step** of the build (fail early: it runs before the two conda solves and the clone,
-staging to a temp file), and the model is copied into the clone once it exists, at the exact
-nested path the predictor loads by default:
+credentials** — MAAP workspace credentials (`maap.aws.workspace_bucket_credentials()`) first,
+then the default AWS credential chain. The fetch runs **right after the cheap geocoding env
+is built** (that env supplies boto3 + maap-py; the base `maap_base` env has neither) and
+**before** the heavy crevasse solve and the clone — fail early, staging to a temp file. The
+model is copied into the clone once it exists, at the exact nested path the predictor loads
+by default:
 
 ```
 <clone>/models/nisar/unet/unet_025_019_f421_meansoft_g3/unet_best.safetensors
