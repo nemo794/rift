@@ -74,19 +74,13 @@ inputs:
 
   - name: max_tiles
     label: max_tiles
-    doc: >
-      Cap on candidate tile positions for the crevasse inference step (prefix of the swath
-      scan order, for a quick correctness check). Empty means no limit (the full swath, slow
-      on CPU).
+    doc: "Cap on candidate tiles for the crevasse inference step (prefix of the swath scan order). Empty means no limit (full swath, slow on CPU)."
     type: string
     default: ""
 
   - name: crop_to_scanned
     label: crop_to_scanned
-    doc: >
-      "true|false. When true, crop the inference GeoTIFFs to the bounding box of the tiles
-      actually scanned (useful with max_tiles so the output is not a mostly-NaN full-swath
-      raster). Not combinable with edge_margin."
+    doc: "true|false. Crop the inference GeoTIFFs to the bounding box of the scanned tiles (pair with max_tiles so a capped run is not a mostly-NaN full-swath raster)."
     type: string
     default: "false"
 
