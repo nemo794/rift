@@ -1,0 +1,89 @@
+algorithm_name: rift-nisar-e2e
+algorithm_version: main
+
+algorithm_description: >
+  NISAR end-to-end: L2 GSLC to per-polarization amplitude COGs on the Antarctica master grid
+  (EPSG:3031, 512x512 chunks), then crevasse-detection inference on the HH amplitude COG. The
+  worker resolves and downloads the granule from ASF (S3-preferred, using MAAP/ASF temporary
+  credentials; authenticated HTTPS fallback), runs rift nisar2cog (slim conda env, no isce3),
+  then runs the nisar-crevasse gate + U-Net model (separate conda env) to write gate_prob.tif
+  and unet_prob.tif alongside the amplitude COGs. All products land in output/.
+
+code_repository: https://github.com/nemo794/rift
+
+run_command: rift/maap/nisar_e2e/run.sh
+build_command: rift/maap/nisar_e2e/build.sh
+
+# Built on MAAP's maap_base image (ships maap-py + the DPS credential plumbing that
+# maap.aws.earthdata_s3_credentials() relies on). No isce3 is needed for the NISAR path.
+# build.sh creates two conda envs in the image: rift_nisar2cog (geocoding) and crevasse (ML).
+base_container_url: mas.maap-project.org/root/maap-workspaces/custom_images/maap_base:v5.0.0
+
+ram_min: 16
+cores_min: 4
+outdir_max: 50
+
+inputs:
+  - name: access_mode
+    label: access_mode
+    doc: "auto | s3 | https. auto prefers S3 (worker is in us-west-2), falls back to HTTPS."
+    type: string
+    default: auto
+
+  - name: s3_href
+    label: s3_href
+    doc: Direct s3:// URL to the NISAR GSLC .h5 (preferred). If blank, resolved via CMR search.
+    type: string
+    default: ""
+
+  - name: https_href
+    label: https_href
+    doc: Authenticated HTTPS URL to the NISAR GSLC .h5 (fallback). If blank, resolved via CMR.
+    type: string
+    default: ""
+
+  - name: short_name
+    label: short_name
+    doc: CMR collection short_name used when no href is supplied.
+    type: string
+    default: NISAR_L2_GSLC_PROVISIONAL_V1
+
+  - name: granule_index
+    label: granule_index
+    doc: Index into the CMR search results when resolving by short_name.
+    type: string
+    default: "0"
+
+  - name: asf_s3_creds_url
+    label: asf_s3_creds_url
+    doc: Endpoint that issues ASF temporary S3 credentials.
+    type: string
+    default: "https://nisar.asf.earthdatacloud.nasa.gov/s3credentials"
+
+  - name: pols
+    label: pols
+    doc: Comma-separated polarizations (e.g. HH,HV). Empty means all frequency-A pols.
+    type: string
+    default: ""
+
+  - name: amp_only
+    label: amp_only
+    doc: "true|false. When true, skip the per-pol phase COGs and write amplitude only."
+    type: string
+    default: "false"
+
+  - name: max_tiles
+    label: max_tiles
+    doc: "Cap on candidate tiles for the crevasse inference step (prefix of the swath scan order). Empty means no limit (full swath, slow on CPU)."
+    type: string
+    default: ""
+
+  - name: crop_to_scanned
+    label: crop_to_scanned
+    doc: "true|false. Crop the inference GeoTIFFs to the bounding box of the scanned tiles (pair with max_tiles so a capped run is not a mostly-NaN full-swath raster)."
+    type: string
+    default: "false"
+
+outputs:
+  - name: out
+    type: Directory
