@@ -25,48 +25,18 @@ repo_root="$(cd "${basedir}/../.." && pwd -P)"
 chmod +x "${basedir}/run.sh" "${basedir}/build.sh"
 
 # --------------------------------------------------------------------------------------
-# Env A: slim geocoding (rift nisar2cog, no isce3)
+# Step 0 (FAIL EARLY): fetch the large NISAR U-Net checkpoint from my-public-bucket.
 # --------------------------------------------------------------------------------------
-ENV_PREFIX="/opt/conda/envs/rift_nisar2cog"
-
-conda env remove -p "${ENV_PREFIX}" -y || true
-conda env create -f "${basedir}/env.yml" --prefix "${ENV_PREFIX}"
-
-# Install rift itself into the geocoding env.
-conda run -p "${ENV_PREFIX}" pip install --no-cache-dir "${repo_root}"
-
-# --------------------------------------------------------------------------------------
-# Env B: nisar-crevasse gate + U-Net inference (torch)
-# --------------------------------------------------------------------------------------
-# Clone the merged crevasse repo (both sensors; we only drive the NISAR side).
-CREVASSE_REPO="${CREVASSE_REPO:-https://github.com/nemo794/nisar-crevasse.git}"
-CREVASSE_REF="${CREVASSE_REF:-main}"
-CREVASSE_DIR="${CREVASSE_DIR:-/opt/nisar-crevasse}"
-
-rm -rf "${CREVASSE_DIR}"
-git clone --depth 1 --branch "${CREVASSE_REF}" "${CREVASSE_REPO}" "${CREVASSE_DIR}"
-
-# The crevasse env is named `crevasse` in its own environment.yml.
-CREVASSE_ENV_PREFIX="/opt/conda/envs/crevasse"
-conda env remove -p "${CREVASSE_ENV_PREFIX}" -y || true
-conda env create -f "${CREVASSE_DIR}/environment.yml" --prefix "${CREVASSE_ENV_PREFIX}"
-
-# Editable install so the console scripts (crevasse-export-geotiff) resolve, and so the
-# default model path (relative to the package source) points inside this clone.
-conda run -p "${CREVASSE_ENV_PREFIX}" pip install --no-cache-dir -e "${CREVASSE_DIR}"
-
-# --------------------------------------------------------------------------------------
-# Bake the large NISAR U-Net checkpoint from my-public-bucket into the clone.
-# --------------------------------------------------------------------------------------
-# my-public-bucket = s3://maap-ops-workspace/shared/<username>/...  It is NOT anonymously
-# readable over HTTPS (returns 403), so fetch it with credentials via boto3: MAAP workspace
-# credentials (maap-py, always present on maap_base) first, then the default AWS chain.
-# Uploaded to: my-public-bucket/crevasse_unet_models/nisar/unet_best.safetensors
+# The credentialed S3 fetch is the most failure-prone step, so do it FIRST — before the two
+# conda solves and the clone — and stage it to a temp file. It is copied into the clone at
+# its final nested path once that exists (see "Bake the model" below).
+#
+# Run with the base maap_base python (ships maap-py + boto3); the geocoding env does not
+# exist yet. my-public-bucket is NOT anonymously public (403 over HTTPS), so fetch with
+# credentials: MAAP workspace credentials first, then the default AWS chain.
 MODEL_S3_URI="${MODEL_S3_URI:-s3://maap-ops-workspace/shared/niemoell/crevasse_unet_models/nisar/unet_best.safetensors}"
-# Must match unet_predict.py's DEFAULT_CHECKPOINT (models/nisar/unet/<run>/unet_best.safetensors).
-MODEL_DEST="${CREVASSE_DIR}/models/nisar/unet/unet_025_019_f421_meansoft_g3/unet_best.safetensors"
+MODEL_STAGED="$(mktemp /tmp/unet_best.XXXXXX.safetensors)"
 
-mkdir -p "$(dirname "${MODEL_DEST}")"
 echo "Fetching NISAR U-Net checkpoint: ${MODEL_S3_URI}"
 
 # NOTE: write the fetcher to a real file and pass args — do NOT pipe a heredoc into
@@ -75,7 +45,6 @@ echo "Fetching NISAR U-Net checkpoint: ${MODEL_S3_URI}"
 FETCH_PY="$(mktemp /tmp/fetch_model.XXXXXX.py)"
 cat > "${FETCH_PY}" <<'PY'
 import sys, boto3
-from botocore.exceptions import ClientError
 
 uri, dest = sys.argv[1], sys.argv[2]
 assert uri.startswith("s3://"), uri
@@ -110,16 +79,63 @@ print(f"ERROR: could not download {uri}: {last}", file=sys.stderr)
 sys.exit(1)
 PY
 
-# Run in the geocoding env (has boto3 + maap-py). Fails the build (set -e) on nonzero exit.
-conda run -p "${ENV_PREFIX}" python "${FETCH_PY}" "${MODEL_S3_URI}" "${MODEL_DEST}"
+# Base env python (fails the build via set -e on nonzero exit).
+python "${FETCH_PY}" "${MODEL_S3_URI}" "${MODEL_STAGED}"
 rm -f "${FETCH_PY}"
 
-# Hard-fail if the model is missing or empty (belt-and-suspenders around the fetch above).
-if [ ! -s "${MODEL_DEST}" ]; then
-  echo "ERROR: model not present after fetch: ${MODEL_DEST}" >&2
+# Hard-fail immediately if the model is missing or empty — before any expensive build step.
+if [ ! -s "${MODEL_STAGED}" ]; then
+  echo "ERROR: model not present after fetch: ${MODEL_STAGED}" >&2
   exit 1
 fi
-echo "  -> ${MODEL_DEST} ($(du -h "${MODEL_DEST}" | cut -f1))"
+echo "  staged -> ${MODEL_STAGED} ($(du -h "${MODEL_STAGED}" | cut -f1))"
+
+# --------------------------------------------------------------------------------------
+# Env A: slim geocoding (rift nisar2cog, no isce3)
+# --------------------------------------------------------------------------------------
+ENV_PREFIX="/opt/conda/envs/rift_nisar2cog"
+
+conda env remove -p "${ENV_PREFIX}" -y || true
+conda env create -f "${basedir}/env.yml" --prefix "${ENV_PREFIX}"
+
+# Install rift itself into the geocoding env.
+conda run -p "${ENV_PREFIX}" pip install --no-cache-dir "${repo_root}"
+
+# --------------------------------------------------------------------------------------
+# Env B: nisar-crevasse gate + U-Net inference (torch)
+# --------------------------------------------------------------------------------------
+# Clone the merged crevasse repo (both sensors; we only drive the NISAR side).
+CREVASSE_REPO="${CREVASSE_REPO:-https://github.com/nemo794/nisar-crevasse.git}"
+CREVASSE_REF="${CREVASSE_REF:-main}"
+CREVASSE_DIR="${CREVASSE_DIR:-/opt/nisar-crevasse}"
+
+rm -rf "${CREVASSE_DIR}"
+git clone --depth 1 --branch "${CREVASSE_REF}" "${CREVASSE_REPO}" "${CREVASSE_DIR}"
+
+# The crevasse env is named `crevasse` in its own environment.yml.
+CREVASSE_ENV_PREFIX="/opt/conda/envs/crevasse"
+conda env remove -p "${CREVASSE_ENV_PREFIX}" -y || true
+conda env create -f "${CREVASSE_DIR}/environment.yml" --prefix "${CREVASSE_ENV_PREFIX}"
+
+# Editable install so the console scripts (crevasse-export-geotiff) resolve, and so the
+# default model path (relative to the package source) points inside this clone.
+conda run -p "${CREVASSE_ENV_PREFIX}" pip install --no-cache-dir -e "${CREVASSE_DIR}"
+
+# --------------------------------------------------------------------------------------
+# Bake the staged U-Net checkpoint into the clone at its final nested path.
+# --------------------------------------------------------------------------------------
+# Must match unet_predict.py's DEFAULT_CHECKPOINT (models/nisar/unet/<run>/unet_best.safetensors).
+MODEL_DEST="${CREVASSE_DIR}/models/nisar/unet/unet_025_019_f421_meansoft_g3/unet_best.safetensors"
+
+mkdir -p "$(dirname "${MODEL_DEST}")"
+mv "${MODEL_STAGED}" "${MODEL_DEST}"
+
+# Hard-fail if the model is missing or empty (belt-and-suspenders around the copy above).
+if [ ! -s "${MODEL_DEST}" ]; then
+  echo "ERROR: model not present after copy: ${MODEL_DEST}" >&2
+  exit 1
+fi
+echo "  baked -> ${MODEL_DEST} ($(du -h "${MODEL_DEST}" | cut -f1))"
 
 conda clean -afy
 
