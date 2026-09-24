@@ -77,66 +77,104 @@ def parse_args() -> argparse.Namespace:
 
 
 # --------------------------------------------------------------------------------------
-# NASA Earthdata credentials setup
+# NASA Earthdata credentials setup (for the DEM download)
 # --------------------------------------------------------------------------------------
-def _setup_earthdata_netrc():
+EARTHDATA_HOST = "urs.earthdata.nasa.gov"
+
+
+def _read_earthdata_secrets() -> Tuple[str, str]:
+    """Return (username, password) for NASA Earthdata from env vars, else MAAP secrets.
+
+    Mirrors ``_esa_secrets``: environment first (local testing), then the MAAP
+    secrets store on the worker. Empty strings if neither source has them.
     """
-    Ensure NASA Earthdata credentials are available for sardem DEM downloads.
+    username = os.environ.get("EARTHDATA_USERNAME") or os.environ.get("EARTHDATA_LOGIN")
+    password = os.environ.get("EARTHDATA_PASSWORD")
+    if username and password:
+        print("EARTHDATA_CREDS_SOURCE: environment", flush=True)
+        return username, password
 
-    The BIOMASS workflow needs a DEM, which sardem downloads from NASA Earthdata
-    (NISAR data source). This requires separate Earthdata credentials from the
-    ESA credentials used for BIOMASS granule access.
+    try:
+        from maap.maap import MAAP
 
-    Checks in order:
-    1. EARTHDATA_USERNAME/PASSWORD env vars (set by caller)
-    2. Existing ~/.netrc file
-    3. MAAP secrets EARTHDATA_USERNAME/EARTHDATA_PASSWORD
+        secrets = MAAP().secrets
+        username = username or secrets.get_secret("EARTHDATA_USERNAME")
+        password = password or secrets.get_secret("EARTHDATA_PASSWORD")
+    except Exception as exc:  # noqa: BLE001
+        print(f"EARTHDATA_CREDS: could not read MAAP secrets: {exc}", flush=True)
+        return "", ""
 
-    If credentials are found in env vars or MAAP secrets and no .netrc exists,
-    creates ~/.netrc with the credentials.
+    if username and password:
+        print("EARTHDATA_CREDS_SOURCE: maap", flush=True)
+    return username or "", password or ""
+
+
+def _netrc_has_earthdata(netrc_path: str) -> bool:
+    """True if ``netrc_path`` already has a complete entry for the Earthdata host."""
+    import netrc
+
+    try:
+        auth = netrc.netrc(netrc_path).authenticators(EARTHDATA_HOST)
+        return bool(auth and auth[0] and auth[2])  # login and password present
+    except (OSError, netrc.NetrcParseError):
+        return False
+
+
+def _setup_earthdata_netrc() -> None:
+    """
+    Ensure ``~/.netrc`` has NASA Earthdata credentials for the sardem DEM download.
+
+    The BIOMASS workflow geocodes against a DEM that ``sardem`` pulls from the NISAR
+    DEM store (``nisar.asf.earthdatacloud.nasa.gov``), which sits behind NASA Earthdata
+    Login — a NASA account entirely separate from the ESA credentials used to fetch the
+    BIOMASS granule, and separate from ASF's temporary *S3* credentials (those are for
+    granule download, not the DEM). sardem reads these credentials *only* from
+    ``~/.netrc`` (it sets ``GDAL_HTTP_NETRC=YES`` and calls ``netrc.authenticators``);
+    it does not consult ``EARTHDATA_*`` env vars, so we must materialize a .netrc here.
+
+    DPS workers start clean (no ~/.netrc and no baked-in Earthdata identity — unlike ADE
+    Hub workspaces), so the credentials must be registered once as MAAP secrets:
+        MAAP().secrets.add_secret("EARTHDATA_USERNAME", "<username>")
+        MAAP().secrets.add_secret("EARTHDATA_PASSWORD", "<password>")
+
+    Idempotent: if a .netrc already has a valid Earthdata entry we leave it alone;
+    otherwise we append one. Raises if no credentials can be found, so the job fails
+    here with a clear message instead of deep inside sardem.
     """
     import stat
 
-    # Check if credentials already available via env vars
-    username = os.environ.get("EARTHDATA_USERNAME")
-    password = os.environ.get("EARTHDATA_PASSWORD")
-
-    # Check if .netrc already exists
     netrc_path = os.path.expanduser("~/.netrc")
-    if os.path.exists(netrc_path):
-        print(f"EARTHDATA_CREDS: existing .netrc found at {netrc_path}", flush=True)
+    if os.path.exists(netrc_path) and _netrc_has_earthdata(netrc_path):
+        print(f"EARTHDATA_CREDS: existing .netrc entry for {EARTHDATA_HOST}", flush=True)
         return
 
-    # If env vars not set, try MAAP secrets
+    username, password = _read_earthdata_secrets()
     if not (username and password):
-        try:
-            from maap.maap import MAAP
-            secrets = MAAP().secrets
-            username = username or secrets.get_secret("EARTHDATA_USERNAME")
-            password = password or secrets.get_secret("EARTHDATA_PASSWORD")
-            if username and password:
-                print("EARTHDATA_CREDS_SOURCE: maap", flush=True)
-        except Exception as exc:
-            print(f"EARTHDATA_CREDS: could not fetch from MAAP secrets: {exc}", flush=True)
-    else:
-        print("EARTHDATA_CREDS_SOURCE: environment", flush=True)
-
-    # If we have credentials, create .netrc
-    if username and password:
-        with open(netrc_path, "w") as f:
-            f.write(f"machine urs.earthdata.nasa.gov\n")
-            f.write(f"    login {username}\n")
-            f.write(f"    password {password}\n")
-        # Set proper permissions (required by netrc)
-        os.chmod(netrc_path, stat.S_IRUSR | stat.S_IWUSR)
-        print(f"EARTHDATA_CREDS: created {netrc_path}", flush=True)
-    else:
-        print(
-            "WARNING: No NASA Earthdata credentials found. DEM download will fail.\n"
-            "Set EARTHDATA_USERNAME and EARTHDATA_PASSWORD env vars or add them as "
-            "MAAP secrets.",
-            flush=True,
+        raise RuntimeError(
+            "NASA Earthdata credentials not found — the DEM download (sardem) needs "
+            f"a NASA Earthdata account for {EARTHDATA_HOST}.\n"
+            "DPS workers do not have these baked in; register them once as MAAP "
+            "secrets from a MAAP Python session:\n"
+            '    from maap.maap import MAAP\n'
+            '    MAAP().secrets.add_secret("EARTHDATA_USERNAME", "<username>")\n'
+            '    MAAP().secrets.add_secret("EARTHDATA_PASSWORD", "<password>")\n'
+            "(or set EARTHDATA_USERNAME / EARTHDATA_PASSWORD env vars for local runs). "
+            "Sign up free at https://urs.earthdata.nasa.gov/users/new"
         )
+
+    entry = (
+        f"machine {EARTHDATA_HOST}\n"
+        f"    login {username}\n"
+        f"    password {password}\n"
+    )
+    # Append (preserve any existing non-Earthdata machines); create if absent.
+    mode = "a" if os.path.exists(netrc_path) else "w"
+    with open(netrc_path, mode) as f:
+        if mode == "a":
+            f.write("\n")
+        f.write(entry)
+    os.chmod(netrc_path, stat.S_IRUSR | stat.S_IWUSR)  # 0600 — netrc refuses looser perms
+    print(f"EARTHDATA_CREDS: wrote {EARTHDATA_HOST} entry to {netrc_path}", flush=True)
 
 
 # --------------------------------------------------------------------------------------
