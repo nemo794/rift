@@ -10,8 +10,10 @@ amplitude (and phase) COGs.
 Unlike the NISAR path (ASF S3 + Earthdata), BIOMASS data lives on ESA's MAAP
 infrastructure. Egress happens *inside* the algorithm (per MAAP guidance): we
 exchange MAAP-managed ESA credentials for a short-lived access token and stream
-the product zip over authenticated HTTPS with ``obstore``. The auth/token flow
-mirrors ``MAAP-Project/esa-biomass-gamma0``.
+the product zip over authenticated HTTPS with ``requests``. The auth/token flow
+mirrors ``MAAP-Project/esa-biomass-gamma0``; the downloader does not (that
+reference uses ``obstore`` against static assets — see the README for why the
+on-the-fly ``/data/zipper/`` zip needs ``requests`` instead).
 
 Credentials (``ESA_MAAP_CLIENT_SECRET`` / ``ESA_OFFLINE_TOKEN``) are read from
 the environment first (local testing), then from MAAP secrets (on the worker).
@@ -20,7 +22,6 @@ the environment first (local testing), then from MAAP secrets (on the worker).
 from __future__ import annotations
 
 import argparse
-import asyncio
 import os
 import subprocess
 import sys
@@ -148,30 +149,34 @@ def resolve_product_url(item_id: str, collection: str) -> str:
     return asset.href
 
 
-async def _download_async(url: str, token: str, dest: str) -> None:
-    import obstore as obs
-    from obstore.store import HTTPStore
-
-    parsed = urlsplit(url)
-    store = HTTPStore(
-        f"{parsed.scheme}://{parsed.netloc}",
-        client_options={
-            "default_headers": {"Authorization": f"Bearer {token}"},
-            "timeout": "10m",
-        },
-    )
-    response = await obs.get_async(store, parsed.path.lstrip("/"))
-    with open(dest, "wb") as f:
-        async for chunk in response.stream():
-            f.write(chunk)
-
-
 def download_product(item_id: str, url: str, token: str, dest_dir: str) -> str:
-    """Stream the authenticated product zip to ``dest_dir/<item_id>.zip``."""
+    """Stream the authenticated product zip to ``dest_dir/<item_id>.zip``.
+
+    The full-product ``product`` asset is served from ESA's ``/data/zipper/``
+    endpoint, which builds the zip on the fly and returns it with
+    ``Transfer-Encoding: chunked`` and *no* ``Content-Length`` header. obstore's
+    object-store HTTP backend rejects such responses (``MissingContentLength``),
+    so we stream with ``requests`` instead, which handles chunked encoding
+    transparently. See the README (`Downloader: requests vs obstore`) for why this
+    differs from the ``esa-biomass-gamma0`` reference, which uses obstore against
+    static, fixed-size enclosure assets.
+    """
+    import requests
+
     dest = os.path.join(dest_dir, f"{item_id}.zip")
     # Do not log the credentialed/ephemeral URL; log the host only.
     print(f"DOWNLOADING product zip from {urlsplit(url).netloc} -> {dest}", flush=True)
-    asyncio.run(_download_async(url, token, dest))
+    with requests.get(
+        url,
+        headers={"Authorization": f"Bearer {token}"},
+        stream=True,
+        timeout=(60, 600),  # (connect, read) — read gaps, not total wall time
+    ) as resp:
+        resp.raise_for_status()
+        with open(dest, "wb") as f:
+            for chunk in resp.iter_content(chunk_size=8 << 20):
+                if chunk:
+                    f.write(chunk)
     return dest
 
 

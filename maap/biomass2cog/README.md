@@ -26,7 +26,7 @@ not on GitHub Actions.
 |------|------|
 | `algorithm_config.yml` | OGC algorithm description: `base_container_url`, `build_command`, `run_command`, named inputs/outputs, resource hints |
 | `build.sh` | Build step: creates the `rift_biomass2cog` conda env, clones + installs biomass-reader, installs rift |
-| `env.yml` | Conda env (isce3 + gdal + biomass-reader stack + obstore/pystac-client/maap-py) |
+| `env.yml` | Conda env (isce3 + gdal + biomass-reader stack + requests/pystac-client/maap-py) |
 | `run.sh` | Run step: `mkdir output`, activates the env, calls `biomass2cog_dps.py` |
 | `biomass2cog_dps.py` | Resolves the Item on the ESA STAC, exchanges ESA creds for a token, streams the product zip, then runs `rift biomass2cog` |
 | `Dockerfile` | `FROM maap_base`; copies the repo, sets `run.sh` as entrypoint |
@@ -110,5 +110,36 @@ Registration builds the image on MAAP's side (it can pull `maap_base`):
 The worker resolves the `item_id` on the ESA MAAP STAC
 (`https://catalog.maap.eo.esa.int/catalogue/`), exchanges the ESA offline token for an
 access token at the ESA IAM endpoint, and streams the full product zip (the `product`
-asset, served from `/data/zipper/...`) with an `Authorization: Bearer` header via
-`obstore`. No pre-staging to a bucket, and no ASF/Earthdata credentials are involved.
+asset, served from `/data/zipper/...`) with an `Authorization: Bearer` header. No
+pre-staging to a bucket, and no ASF/Earthdata credentials are involved.
+
+## Downloader: `requests` vs `obstore` (and how this differs from the reference)
+
+The [`esa-biomass-gamma0`](https://github.com/MAAP-Project/esa-biomass-gamma0) reference
+uses `obstore`'s `HTTPStore` to fetch its source data. We deliberately **do not** — and
+the difference is worth understanding because it shapes the future direction here.
+
+The two packages download fundamentally different things:
+
+| | `esa-biomass-gamma0` (reference) | this package (`biomass2cog`) |
+|---|---|---|
+| Collection | `BiomassLevel1b` | `BiomassLevel1a` |
+| What it fetches | 3 **static** enclosure assets (`enclosure_tiff`, `enclosure_nc`, `enclosure_annot_xml`) | the **full-product `.zip`** (`product` asset) |
+| Endpoint | fixed-size object files | ESA `/data/zipper/...`, which builds the zip **on the fly** |
+| Response | has a real `Content-Length` | `Transfer-Encoding: chunked`, **no `Content-Length`** |
+
+`obstore` is an object-store client: its HTTP backend assumes every object has a known
+size and raises `GenericError: Content-Length Header missing from response`
+(`MissingContentLength`) when the header is absent. That's fine for the reference's static
+assets, but the zipper endpoint streams chunked with no length, so `obstore` can never
+download it. We therefore stream the zip with `requests` (already a dependency), which
+handles chunked transfer encoding transparently. The auth/token flow is otherwise
+identical to the reference.
+
+**Future direction:** rather than pulling the on-the-fly full-product zip, we'll likely
+switch to resolving the **individual L1A enclosure assets** (the SCS equivalents of the
+reference's `enclosure_*` assets). Those are static, fixed-size objects, so we could then
+use `obstore` exactly as the reference does — and `rift biomass2cog` would need to accept
+a directory of assets rather than a `.zip`. That would mean re-adding `obstore` to
+`env.yml` (it was removed once the downloader moved to `requests`, to keep the env lean).
+Not doing this yet: the current CLI expects the full product zip.

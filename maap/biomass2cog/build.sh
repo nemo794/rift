@@ -35,12 +35,12 @@ rm -rf "${work}"
 # Sanity check the runtime.
 conda run -p "${ENV_PREFIX}" python - <<'PY'
 import isce3, rasterio, h5py, numpy, scipy, pyproj
-import obstore, pystac_client, sardem
+import requests, pystac_client, sardem
 from biomass_reader import BiomassSlc
 import rift
 print("Environment validation successful.")
 print("isce3", isce3.__version__, "| rasterio", rasterio.__version__)
-print("obstore", obstore.__version__, "| pystac_client", pystac_client.__version__)
+print("requests", requests.__version__, "| pystac_client", pystac_client.__version__)
 PY
 
 echo "✓ rift biomass2cog environment ready at ${ENV_PREFIX}"
