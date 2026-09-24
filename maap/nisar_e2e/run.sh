@@ -1,42 +1,19 @@
-#!/bin/bash
+#!/usr/bin/env bash
 ################################################################################
-# MAAP DPS run script for the rift NISAR end-to-end algorithm.
+# MAAP DPS run script for the rift nisar-e2e OGC algorithm.
 #
-# DPS convention: inputs staged in ./input, outputs captured from ./output.
-# Positional args (from algorithm_config.yaml), in order:
-#   x_spacing y_spacing native resampling threshold pols keep_intermediates
+# DPS passes the registered inputs as --name value pairs. This wrapper creates the
+# output/ directory and hands off to the Python entrypoint inside the geocoding
+# conda env (rift_nisar2cog). That entrypoint runs rift nisar2cog, then shells out
+# to the `crevasse` env for the ML inference step (both write to output/).
 ################################################################################
 set -euo pipefail
 
-basedir=$(dirname "$(readlink -f "$0")")
-INPUT_DIR="${PWD}/input"
-OUTPUT_DIR="${PWD}/output"
-mkdir -p "${OUTPUT_DIR}"
+basedir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+OUTDIR="${USER_OUTPUT_DIR:-${OUTPUT_DIR:-output}}"
+mkdir -p "${OUTDIR}"
 
-X_SPACING="${1:-5}"
-Y_SPACING="${2:-5}"
-NATIVE="${3:-false}"
-RESAMPLING="${4:-nearest}"
-THRESHOLD="${5:-0.5}"
-POLS="${6:-}"
-KEEP="${7:-false}"
+conda run --live-stream -p /opt/conda/envs/rift_nisar2cog \
+  python "${basedir}/nisar_e2e_dps.py" --out_dir "${OUTDIR}" "$@"
 
-GSLC=$(find "${INPUT_DIR}" -maxdepth 1 -iname "NISAR_*GSLC*.h5" | head -n 1)
-if [ -z "${GSLC}" ]; then
-    echo "ERROR: no NISAR GSLC (.h5) found in ${INPUT_DIR}" >&2
-    exit 1
-fi
-
-EXTRA=()
-[ "${NATIVE}" = "true" ] && EXTRA+=(--native)
-[ "${KEEP}" = "true" ] && EXTRA+=(--keep-intermediates)
-[ -n "${POLS}" ] && EXTRA+=(--pols "[${POLS}]")
-
-conda run -n rift rift nisar-e2e \
-    --gslc "${GSLC}" \
-    --output "${OUTPUT_DIR}" \
-    --x-spacing "${X_SPACING}" \
-    --y-spacing "${Y_SPACING}" \
-    --resampling "${RESAMPLING}" \
-    --threshold "${THRESHOLD}" \
-    "${EXTRA[@]}"
+find "${OUTDIR}" -maxdepth 2 -print || true
