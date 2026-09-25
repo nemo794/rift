@@ -1,5 +1,5 @@
 algorithm_name: rift-biomass-e2e
-algorithm_version: maap-ogc-biomass-e2e
+algorithm_version: main
 
 algorithm_description: >
   BIOMASS end-to-end: ESA BIOMASS Level-1A SCS to per-polarization amplitude (and phase)
