@@ -1,0 +1,70 @@
+algorithm_name: rift-biomass-e2e
+algorithm_version: maap-ogc-biomass-e2e
+
+algorithm_description: >
+  BIOMASS end-to-end: ESA BIOMASS Level-1A SCS to per-polarization amplitude (and phase)
+  Cloud-Optimized GeoTIFFs on the Antarctica master grid (EPSG:3031, 5x5 m, 512x512 chunks),
+  then crevasse-detection inference. The worker resolves the granule by STAC Item ID on the
+  ESA MAAP catalogue, exchanges MAAP-managed ESA credentials for an access token, and streams
+  the full product zip. It runs rift biomass2cog (isce3 geocoding, DEM auto-downloaded via
+  sardem), derives per-pol *_intensity.tif COGs, then runs the nisar-crevasse BIOMASS gate +
+  U-Net model (separate conda env) to write gate_prob.tif and unet_prob.tif. All four
+  polarizations (HH,HV,VH,VV) are geocoded (the U-Net is a 4-channel model), so pols are not a
+  job input. All products land in output/.
+
+code_repository: https://github.com/nemo794/rift
+
+run_command: rift/maap/biomass_e2e/run.sh
+build_command: rift/maap/biomass_e2e/build.sh
+
+# Built on MAAP's maap_base image (ships maap-py + the DPS credential plumbing that
+# MAAP().secrets relies on). build.sh creates two conda envs in the image:
+# rift_biomass2cog (isce3 + biomass-reader geocoding) and crevasse (ML), and bakes the
+# BIOMASS U-Net checkpoint into the crevasse clone.
+base_container_url: mas.maap-project.org/root/maap-workspaces/custom_images/maap_base:v5.0.0
+
+# Geocoding keeps the full radar SLC resident plus an output block; the U-Net is CPU-bound.
+ram_min: 32
+cores_min: 8
+outdir_max: 50
+
+inputs:
+  - name: item_id
+    label: item_id
+    doc: ESA BIOMASS Level-1A SCS STAC Item ID (collection BiomassLevel1a).
+    type: string
+    default: ""
+
+  - name: amp_only
+    label: amp_only
+    doc: "true|false. When true, skip the per-pol phase COGs and write amplitude only. Intensity COGs (needed for inference) are always derived from the amplitude COGs regardless."
+    type: string
+    default: "false"
+
+  - name: max_tiles
+    label: max_tiles
+    doc: "Cap on candidate tiles for the crevasse inference step (prefix of the scan order). Empty means no limit (full granule, slow on CPU)."
+    type: string
+    default: ""
+
+  - name: crop_to_scanned
+    label: crop_to_scanned
+    doc: "true|false. Crop the inference GeoTIFFs to the bounding box of the scanned tiles (pair with max_tiles so a capped run is not a mostly-NaN full-granule raster). Mutually exclusive with edge_margin."
+    type: string
+    default: "false"
+
+  - name: gate_thresh
+    label: gate_thresh
+    doc: "Gate probability threshold for flagging tiles to run the U-Net on (default 0.65)."
+    type: string
+    default: "0.65"
+
+  - name: edge_margin
+    label: edge_margin
+    doc: "Rescore on an overlapping (512 - 2*N)-pixel-stride grid, keeping each tile's center region, to remove the faint tile-seam artifact. Costs ~(512/(512-2*N))^2 more U-Net passes. 0 = off. Mutually exclusive with crop_to_scanned."
+    type: string
+    default: "0"
+
+outputs:
+  - name: out
+    type: Directory

@@ -1,19 +1,24 @@
 #!/usr/bin/env python3
-"""Create per-polarization power (a.k.a. intensity) COGs from geocoded amplitude COGs.
+"""Create per-polarization intensity (a.k.a. power) COGs from geocoded amplitude COGs.
 
 Both the ``nisar2cog`` and ``biomass2cog`` pipelines emit a per-polarization amplitude
-COG named ``*_<POL>_amp.tif``. Power (linear intensity) is simply ``amp**2``, so this
+COG named ``*_<POL>_amp.tif``. Intensity (linear power) is simply ``amp**2``, so this
 script reads each amplitude COG block-by-block (to keep memory modest), squares it, and
-writes a co-registered ``*_<POL>_pwr.tif`` COG alongside the input.
+writes a co-registered ``*_<POL>_intensity.tif`` COG alongside the input.
 
-Phase COGs (``*_<POL>_phs.tif``) are not needed for power and are ignored.
+The ``*_<POL>_intensity.tif`` naming is required by the downstream BIOMASS crevasse model
+(``nisar-crevasse``'s ``crevasse.biomass.run_granule._granule_paths`` globs
+``*_<POL>_intensity.tif`` for each of HH/HV/VH/VV), so this suffix is a hard contract, not
+a cosmetic choice.
+
+Phase COGs (``*_<POL>_phs.tif``) are not needed for intensity and are ignored.
 
 Usage::
 
     python scripts/make_pwr_cogs.py <data_dir> [--output-dir DIR]
 
-By default the power COGs are written to the same directory as their source amplitude
-COGs. Existing power COGs are always overwritten.
+By default the intensity COGs are written to the same directory as their source amplitude
+COGs. Existing intensity COGs are always overwritten.
 """
 
 from __future__ import annotations
@@ -44,8 +49,8 @@ def amp_path(data_dir: Path, pol: str):
 
 
 def build_one(src_path: Path, out_dir: Path) -> Path:
-    """Read one amplitude COG, square it block-wise, and write a power COG."""
-    out_path = out_dir / src_path.name.replace("_amp.tif", "_pwr.tif")
+    """Read one amplitude COG, square it block-wise, and write an intensity COG."""
+    out_path = out_dir / src_path.name.replace("_amp.tif", "_intensity.tif")
     temp_path = out_path.with_suffix(".temp.tif")
     print(f"  {src_path.name} -> {out_path.name}")
 
@@ -62,9 +67,9 @@ def build_one(src_path: Path, out_dir: Path) -> Path:
             # Iterate over the source's native block windows to bound memory use.
             for _, window in src.block_windows(1):
                 amp = src.read(1, window=window)
-                # power = |complex|**2 = amp**2 ; NaNs propagate as nodata.
-                pwr = np.square(amp, dtype=np.float32)
-                dst.write(pwr, 1, window=window)
+                # intensity = |complex|**2 = amp**2 ; NaNs propagate as nodata.
+                intensity = np.square(amp, dtype=np.float32)
+                dst.write(intensity, 1, window=window)
 
     # Convert the tiled temp GeoTIFF to a proper COG (builds overviews); float predictor.
     finalize_cog(temp_path, out_path, predictor=3, overview_resampling="AVERAGE")
@@ -85,7 +90,7 @@ def main() -> int:
         "--output-dir",
         type=Path,
         default=None,
-        help="Output directory for the power COGs (default: same as each input)",
+        help="Output directory for the intensity COGs (default: same as each input)",
     )
     args = ap.parse_args()
 
@@ -97,7 +102,7 @@ def main() -> int:
     out_dir = args.output_dir.resolve() if args.output_dir else data_dir
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"Creating power COGs from amplitude COGs in {data_dir}")
+    print(f"Creating intensity COGs from amplitude COGs in {data_dir}")
     n = 0
     for pol in POLS:
         src_path = amp_path(data_dir, pol)
@@ -111,7 +116,7 @@ def main() -> int:
     if n == 0:
         print("No amplitude COGs found.", file=sys.stderr)
         return 1
-    print(f"Done: {n} power COG(s) written.")
+    print(f"Done: {n} intensity COG(s) written.")
     return 0
 
 
