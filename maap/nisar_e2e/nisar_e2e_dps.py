@@ -52,6 +52,15 @@ def parse_args() -> argparse.Namespace:
                         "Empty = full swath.")
     p.add_argument("--crop_to_scanned", default="false",
                    help="true|false. Crop inference GeoTIFFs to the scanned bounding box.")
+    p.add_argument("--bedmap_mask", default="",
+                   help="Bedmap3 grounded-ice mask for the pre-scoring candidate filter. "
+                        "'true' (or 'default') uses the crevasse-bundled mask; a path uses "
+                        "your own; empty (default) disables grounded filtering. Requires "
+                        "min_grounded.")
+    p.add_argument("--min_grounded", default="",
+                   help="Drop candidate tiles whose Bedmap3 grounded-ice fraction is below "
+                        "this (e.g. 0.80) before any gate/U-Net scoring. Empty (default) = "
+                        "off. Requires bedmap_mask.")
     p.add_argument(
         "--out_dir",
         default=os.environ.get("USER_OUTPUT_DIR") or os.environ.get("OUTPUT_DIR") or "output",
@@ -209,7 +218,8 @@ def _find_hh_amp(out_dir: str) -> str:
     raise RuntimeError(f"No amplitude COG (*_amp.tif) found in {out_dir} for inference.")
 
 
-def run_crevasse(amp_cog: str, out_dir: str, max_tiles: str, crop_to_scanned: str) -> int:
+def run_crevasse(amp_cog: str, out_dir: str, max_tiles: str, crop_to_scanned: str,
+                 bedmap_mask: str, min_grounded: str) -> int:
     """Step 2: crevasse gate + U-Net inference, in the `crevasse` env.
 
     Writes gate_prob.tif + unet_prob.tif into out_dir alongside the amplitude COGs."""
@@ -220,6 +230,22 @@ def run_crevasse(amp_cog: str, out_dir: str, max_tiles: str, crop_to_scanned: st
         inner += ["--max-tiles", max_tiles]
     if str(crop_to_scanned).strip().lower() == "true":
         inner += ["--crop-to-scanned"]
+
+    # Grounded-ice pre-filter (crevasse.common.grounded_filter). The two crevasse flags
+    # are required together; keep that contract here rather than sending a half-pair.
+    mask = (bedmap_mask or "").strip()
+    grounded = (min_grounded or "").strip()
+    if bool(mask) != bool(grounded):
+        print("WARNING: bedmap_mask and min_grounded must be given together; "
+              "ignoring the grounded-ice filter for this run.", flush=True)
+    elif mask and grounded:
+        # 'true'/'default' -> the crevasse-bundled mask (flag passed with no value);
+        # anything else is treated as a path to a mask GeoTIFF.
+        if mask.lower() in {"true", "default"}:
+            inner += ["--bedmap-mask"]
+        else:
+            inner += ["--bedmap-mask", mask]
+        inner += ["--min-grounded", grounded]
 
     cmd = ["conda", "run", "--live-stream", "-n", "crevasse"] + inner
     print(f"RUNNING: {' '.join(cmd)}", flush=True)
@@ -248,7 +274,8 @@ def main() -> int:
 
     amp_cog = _find_hh_amp(args.out_dir)
     print(f"INFERENCE_INPUT: {amp_cog}", flush=True)
-    return run_crevasse(amp_cog, args.out_dir, args.max_tiles, args.crop_to_scanned)
+    return run_crevasse(amp_cog, args.out_dir, args.max_tiles, args.crop_to_scanned,
+                        args.bedmap_mask, args.min_grounded)
 
 
 if __name__ == "__main__":

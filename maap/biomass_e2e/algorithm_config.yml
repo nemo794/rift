@@ -55,15 +55,27 @@ inputs:
 
   - name: gate_thresh
     label: gate_thresh
-    doc: "Gate probability threshold for flagging tiles to run the U-Net on (default 0.65)."
+    doc: "Gate probability threshold for flagging tiles to run the U-Net on (default 0.5)."
     type: string
-    default: "0.65"
+    default: "0.5"
 
   - name: edge_margin
     label: edge_margin
-    doc: "Rescore on an overlapping (512 - 2*N)-pixel-stride grid, keeping each tile's center region, to remove the faint tile-seam artifact. Costs ~(512/(512-2*N))^2 more U-Net passes. 0 = off. Mutually exclusive with crop_to_scanned."
+    doc: "Rescore on an overlapping (512 - 2*N)-pixel-stride grid, keeping each tile's center region, to remove the faint tile-seam artifact. Costs ~(512/(512-2*N))^2 more U-Net passes. 0 = off (default 64). Mutually exclusive with crop_to_scanned."
     type: string
-    default: "0"
+    default: "64"
+
+  - name: bedmap_mask
+    label: bedmap_mask
+    doc: "Bedmap3 grounded-ice mask for the pre-scoring candidate filter. 'true' (or 'default') uses the crevasse-bundled mask; a path uses your own; empty (default) disables grounded filtering. Requires min_grounded."
+    type: string
+    default: ""
+
+  - name: min_grounded
+    label: min_grounded
+    doc: "Drop candidate tiles whose Bedmap3 grounded-ice fraction is below this (e.g. 0.80) before any gate/U-Net scoring. Empty (default) = off. Requires bedmap_mask. Note: with edge_margin > 0, grounded filtering narrows only the rescoring bounding box, not each individual tile."
+    type: string
+    default: ""
 
 outputs:
   - name: out

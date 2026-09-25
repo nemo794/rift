@@ -81,11 +81,20 @@ def parse_args() -> argparse.Namespace:
                         "Empty = full granule (slow on CPU).")
     p.add_argument("--crop_to_scanned", default="false",
                    help="true|false. Crop inference GeoTIFFs to the scanned bounding box.")
-    p.add_argument("--gate_thresh", default="0.65",
-                   help="Gate probability threshold for flagging tiles (default 0.65).")
-    p.add_argument("--edge_margin", default="0",
+    p.add_argument("--gate_thresh", default="0.5",
+                   help="Gate probability threshold for flagging tiles (default 0.5).")
+    p.add_argument("--edge_margin", default="64",
                    help="Overlap-stride rescoring margin to remove tile-seam artifacts "
-                        "(0 = off). Not combinable with crop_to_scanned.")
+                        "(0 = off, default 64). Not combinable with crop_to_scanned.")
+    p.add_argument("--bedmap_mask", default="",
+                   help="Bedmap3 grounded-ice mask for the pre-scoring candidate filter. "
+                        "'true' (or 'default') uses the crevasse-bundled mask; a path uses "
+                        "your own; empty (default) disables grounded filtering. Requires "
+                        "min_grounded.")
+    p.add_argument("--min_grounded", default="",
+                   help="Drop candidate tiles whose Bedmap3 grounded-ice fraction is below "
+                        "this (e.g. 0.80) before any gate/U-Net scoring. Empty (default) = "
+                        "off. Requires bedmap_mask.")
     p.add_argument(
         "--out_dir",
         default=os.environ.get("USER_OUTPUT_DIR")
@@ -347,7 +356,8 @@ def make_intensity_cogs(out_dir: str) -> int:
 
 
 def run_crevasse(granule_dir: str, out_dir: str, max_tiles: str,
-                 crop_to_scanned: str, gate_thresh: str, edge_margin: str) -> int:
+                 crop_to_scanned: str, gate_thresh: str, edge_margin: str,
+                 bedmap_mask: str, min_grounded: str) -> int:
     """Step 3: crevasse BIOMASS gate + U-Net inference, in the `crevasse` env.
 
     The BIOMASS reader takes the *directory* of ``*_<POL>_intensity.tif`` COGs (all four
@@ -378,6 +388,26 @@ def run_crevasse(granule_dir: str, out_dir: str, max_tiles: str,
         inner += ["--edge-margin", str(margin)]
     if crop:
         inner += ["--crop-to-scanned"]
+
+    # Grounded-ice pre-filter (crevasse.common.grounded_filter). The two crevasse flags
+    # are required together; keep that contract here rather than sending a half-pair.
+    # NOTE: with edge_margin > 0 the crevasse export path uses the grounded-filtered
+    # candidate list only to compute the rescoring bounding box, then rescores every tile
+    # inside that box -- so grounded filtering degrades to bbox-only when edge_margin is
+    # on. Still narrows the scan; just not per-tile.
+    mask = (bedmap_mask or "").strip()
+    grounded = (min_grounded or "").strip()
+    if bool(mask) != bool(grounded):
+        print("WARNING: bedmap_mask and min_grounded must be given together; "
+              "ignoring the grounded-ice filter for this run.", flush=True)
+    elif mask and grounded:
+        # 'true'/'default' -> the crevasse-bundled mask (flag passed with no value);
+        # anything else is treated as a path to a mask GeoTIFF.
+        if mask.lower() in {"true", "default"}:
+            inner += ["--bedmap-mask"]
+        else:
+            inner += ["--bedmap-mask", mask]
+        inner += ["--min-grounded", grounded]
 
     cmd = ["conda", "run", "--live-stream", "-n", "crevasse"] + inner
     print(f"RUNNING: {' '.join(cmd)}", flush=True)
@@ -414,7 +444,8 @@ def main() -> int:
 
     print(f"INFERENCE_INPUT_DIR: {args.out_dir}", flush=True)
     return run_crevasse(args.out_dir, args.out_dir, args.max_tiles,
-                        args.crop_to_scanned, args.gate_thresh, args.edge_margin)
+                        args.crop_to_scanned, args.gate_thresh, args.edge_margin,
+                        args.bedmap_mask, args.min_grounded)
 
 
 if __name__ == "__main__":
