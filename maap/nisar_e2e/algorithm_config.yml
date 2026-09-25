@@ -84,6 +84,18 @@ inputs:
     type: string
     default: "false"
 
+  - name: bedmap_mask
+    label: bedmap_mask
+    doc: "Bedmap3 grounded-ice mask for the pre-scoring candidate filter. 'true' (or 'default') uses the crevasse-bundled mask; a path uses your own; empty (default) disables grounded filtering. Requires min_grounded."
+    type: string
+    default: ""
+
+  - name: min_grounded
+    label: min_grounded
+    doc: "Drop candidate tiles whose Bedmap3 grounded-ice fraction is below this (e.g. 0.80) before any gate/U-Net scoring. Empty (default) = off. Requires bedmap_mask."
+    type: string
+    default: ""
+
 outputs:
   - name: out
     type: Directory

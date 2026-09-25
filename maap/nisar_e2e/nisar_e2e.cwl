@@ -48,6 +48,14 @@ inputs:
     type: string
     default: "false"
     inputBinding: { prefix: --crop_to_scanned }
+  bedmap_mask:
+    type: string
+    default: ""
+    inputBinding: { prefix: --bedmap_mask }
+  min_grounded:
+    type: string
+    default: ""
+    inputBinding: { prefix: --min_grounded }
 
 outputs:
   out:

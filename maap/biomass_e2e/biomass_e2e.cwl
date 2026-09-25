@@ -28,12 +28,20 @@ inputs:
     inputBinding: { prefix: --crop_to_scanned }
   gate_thresh:
     type: string
-    default: "0.65"
+    default: "0.5"
     inputBinding: { prefix: --gate_thresh }
   edge_margin:
     type: string
-    default: "0"
+    default: "64"
     inputBinding: { prefix: --edge_margin }
+  bedmap_mask:
+    type: string
+    default: ""
+    inputBinding: { prefix: --bedmap_mask }
+  min_grounded:
+    type: string
+    default: ""
+    inputBinding: { prefix: --min_grounded }
 
 outputs:
   out:
