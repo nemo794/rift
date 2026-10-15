@@ -68,7 +68,7 @@ inputs:
 
   - name: products
     label: products
-    doc: "Comma-separated COG products: any of amp, phs, intensity. Must include amp (the crevasse NISAR input); add phs/intensity to also write those COGs."
+    doc: "Comma-separated COG products: any of amp, phs, intensity (e.g. amp or amp,phs,intensity). Must include amp (the crevasse NISAR input); add phs/intensity to also write those COGs."
     type: string
     default: "amp"
 

@@ -37,7 +37,7 @@ inputs:
 
   - name: products
     label: products
-    doc: "Comma-separated COG products: any of amp, phs, intensity. Must include intensity (the crevasse BIOMASS reader's input); add amp/phs to also keep those COGs."
+    doc: "Comma-separated COG products: any of amp, phs, intensity (e.g. intensity or amp,phs,intensity). Must include intensity (the crevasse BIOMASS reader's input); add amp/phs to also keep those COGs."
     type: string
     default: "intensity"
 
