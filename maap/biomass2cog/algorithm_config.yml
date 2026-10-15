@@ -1,5 +1,5 @@
 algorithm_name: rift-biomass2cog
-algorithm_version: maap-ogc-biomass2cog
+algorithm_version: main
 
 algorithm_description: >
   ESA BIOMASS Level-1A SCS to per-polarization amplitude (and phase) Cloud-Optimized
