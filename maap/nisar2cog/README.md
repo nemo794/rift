@@ -37,7 +37,8 @@ Inputs (all named):
 - `short_name` (`NISAR_L2_GSLC_PROVISIONAL_V1`) / `granule_index` — CMR search fallback.
 - `asf_s3_creds_url` — ASF temporary-S3-credentials endpoint.
 - `pols` — comma-separated (`HH,HV`); empty = all freq-A pols.
-- `amp_only` — `true|false`; `true` skips phase COGs.
+- `products` — comma-separated COG products (no brackets), any of `amp`, `phs`, `intensity`
+  (default `amp,phs`); e.g. `amp,phs,intensity` for all three, or `intensity` for one.
 
 Output: `output/` directory (staged out to `~/my-private-bucket/dps_output/rift-nisar2cog/...`).
 
@@ -55,7 +56,7 @@ python maap/nisar2cog/nisar2cog_dps.py \
     --access_mode auto \
     --short_name NISAR_L2_GSLC_PROVISIONAL_V1 \
     --granule_index 0 \
-    --pols "" --amp_only false \
+    --pols "" --products "amp,phs" \
     --out_dir output
 ls -la output/                                   # <pol>_amplitude.tif (+ <pol>_phase.tif)
 gdalinfo output/*amplitude.tif | grep -E "EPSG|Size"   # expect EPSG:3031

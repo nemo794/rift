@@ -5,7 +5,7 @@
 # DPS passes the registered inputs as --name value pairs. This wrapper creates the
 # output/ directory and hands off to the Python entrypoint inside the geocoding
 # conda env (rift_biomass2cog). That entrypoint fetches the ESA granule, runs
-# rift biomass2cog, derives per-pol *_intensity.tif COGs (scripts/make_pwr_cogs.py),
+# rift biomass2cog with products=intensity to write the per-pol *_intensity.tif COGs,
 # then shells out to the `crevasse` env for the BIOMASS gate + U-Net inference step
 # (all write to output/).
 ################################################################################

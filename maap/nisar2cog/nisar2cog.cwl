@@ -37,10 +37,10 @@ inputs:
   pols:
     type: string?
     inputBinding: { prefix: --pols }
-  amp_only:
+  products:
     type: string
-    default: "false"
-    inputBinding: { prefix: --amp_only }
+    default: "amp,phs"
+    inputBinding: { prefix: --products }
 
 outputs:
   out:

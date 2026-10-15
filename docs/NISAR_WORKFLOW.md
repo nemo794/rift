@@ -16,8 +16,9 @@ The master grid is fixed at **5×5 m** (shared with BIOMASS). NISAR has no spaci
 
 ## Output
 
-- One amplitude COG per polarization: `<granule>_<POL>_amp.tif` (and a co-registered phase
-  COG `<granule>_<POL>_phs.tif` unless `--amp-only`)
+- One COG per polarization per selected product (`--products`, default `[amp,phs]`):
+  `<granule>_<POL>_amp.tif`, co-registered phase `<granule>_<POL>_phs.tif`, and/or intensity
+  `<granule>_<POL>_intensity.tif` (`amp**2`)
   - Band 1: linear amplitude (`float32`), `NaN` = invalid/no-data
   - 512×512 tiling, DEFLATE + predictor 3, aligned to master-grid chunk boundaries
 

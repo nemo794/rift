@@ -15,10 +15,10 @@ inputs:
   item_id:
     type: string
     inputBinding: { prefix: --item_id }
-  amp_only:
+  products:
     type: string
-    default: "false"
-    inputBinding: { prefix: --amp_only }
+    default: "intensity"
+    inputBinding: { prefix: --products }
   max_tiles:
     type: string?
     inputBinding: { prefix: --max_tiles }

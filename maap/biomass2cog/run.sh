@@ -14,12 +14,7 @@ mkdir -p "${OUTDIR}"
 conda run --live-stream -p /opt/conda/envs/rift_biomass2cog \
   python "${basedir}/biomass2cog_dps.py" --out_dir "${OUTDIR}" "$@"
 
-# Derive per-polarization intensity (power) COGs from the *_amp.tif COGs that
-# biomass2cog just wrote, alongside them in the output directory (as *_intensity.tif).
-# Best-effort: a failure here (e.g. no amp COGs on an amp-only=false run) must not fail
-# the job.
-conda run --live-stream -p /opt/conda/envs/rift_biomass2cog \
-  python "${basedir}/../../scripts/make_pwr_cogs.py" "${OUTDIR}" --output-dir "${OUTDIR}" \
-  || echo "WARNING: make_pwr_cogs.py failed; continuing without intensity COGs" >&2
+# Intensity (*_intensity.tif) is now produced in-process by `rift biomass2cog` when
+# `intensity` is in the --products list (pass products=amp,phs,intensity or products=intensity).
 
 find "${OUTDIR}" -maxdepth 2 -print || true

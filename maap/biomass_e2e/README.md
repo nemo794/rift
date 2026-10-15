@@ -2,13 +2,13 @@
 
 Runs the full BIOMASS crevasse-detection pipeline on MAAP DPS:
 
-1. **Geocode** — an ESA BIOMASS Level-1A **SCS** granule → per-polarization amplitude (and
-   phase) COGs on the Antarctica master grid (EPSG:3031, 5×5 m, 512×512 chunks), geocoded
-   with ISCE3 (`rift biomass2cog`). All four pols HH,HV,VH,VV are geocoded.
-2. **Intensity** — square each `*_<POL>_amp.tif` into a co-registered `*_<POL>_intensity.tif`
-   (`scripts/make_pwr_cogs.py`). These four intensity COGs are the inputs the crevasse model
-   consumes.
-3. **Inference** — the **nisar-crevasse** BIOMASS gate + U-Net model runs on the directory of
+1. **Geocode + intensity** — an ESA BIOMASS Level-1A **SCS** granule → per-polarization
+   `*_<POL>_intensity.tif` COGs (linear intensity = amplitude², `amp**2`) on the Antarctica
+   master grid (EPSG:3031, 5×5 m, 512×512 chunks), geocoded with ISCE3 (`rift biomass2cog
+   --products intensity`). All four pols HH,HV,VH,VV are geocoded. These four intensity COGs
+   are the inputs the crevasse model consumes. (Add `amp`/`phs` to `products` to also keep
+   those COGs.)
+2. **Inference** — the **nisar-crevasse** BIOMASS gate + U-Net model runs on the directory of
    intensity COGs, writing `gate_prob.tif` + `unet_prob.tif` into the same `output/`.
 
 All steps run behind one entrypoint, each in its own conda env. This package extends the
@@ -25,9 +25,10 @@ The BIOMASS U-Net is a **4-channel** model (HH,HV,VH,VV), and the crevasse reade
 `*_<POL>_intensity.tif` for **each** of the four pols — a missing pol is a hard error. So:
 
 - The pols are **hardcoded** to `HH,HV,VH,VV` in `biomass_e2e_dps.py` (not a job input).
-- `scripts/make_pwr_cogs.py` writes `*_<POL>_intensity.tif` (linear intensity = amplitude²).
-  The suffix is a hard contract with the reader, not cosmetic. (This shared script is also
-  used by the `biomass2cog` package, which now emits the same `*_intensity.tif`.)
+- `rift biomass2cog --products intensity` writes `*_<POL>_intensity.tif` (linear intensity =
+  amplitude²) in-process (via `rift.intensity`). The suffix is a hard contract with the
+  reader, not cosmetic. The job's `products` input must include `intensity`; the entrypoint
+  rejects a selection that omits it.
 
 ## Two conda envs in one image
 
@@ -72,21 +73,23 @@ The default gate method is `rf`, which needs no CNN weights.
 | `build.sh` | Build step: creates both conda envs, installs rift + biomass-reader + nisar-crevasse, bakes the BIOMASS U-Net model |
 | `env.yml` | Geocoding conda env (`rift_biomass2cog`; isce3 + biomass-reader stack + boto3) |
 | `run.sh` | Run step: `mkdir output`, activates the geocoding env, calls `biomass_e2e_dps.py` |
-| `biomass_e2e_dps.py` | Resolves the Item on the ESA STAC, exchanges ESA creds for a token, streams the product zip, runs `rift biomass2cog`, derives `*_intensity.tif`, then `crevasse-export-geotiff biomass` |
+| `biomass_e2e_dps.py` | Resolves the Item on the ESA STAC, exchanges ESA creds for a token, streams the product zip, runs `rift biomass2cog --products intensity` (writes `*_intensity.tif`), then `crevasse-export-geotiff biomass` |
 | `Dockerfile` | `FROM maap_base`; copies the repo, sets `run.sh` as entrypoint |
 | `biomass_e2e.cwl` | Reference CWL for local `cwltool` runs |
 
 Inputs (all named):
 - `item_id` — ESA BIOMASS L1A SCS STAC Item ID (collection `BiomassLevel1a`), e.g.
   `BIO_S1_SCS__1S_20260922T230451_..._DY7A91`.
-- `amp_only` — `true|false`; `true` skips the per-pol *phase* COGs (amplitude + intensity are
-  still written — intensity is required for inference).
+- `products` — comma-separated COG products (no brackets), any of `amp`, `phs`, `intensity`
+  (default `intensity`); e.g. `intensity` or `amp,phs,intensity`. Must include `intensity`
+  (the crevasse input); add `amp`/`phs` to also keep those COGs. A selection omitting
+  `intensity` is rejected.
 - `max_tiles` — cap on candidate tiles for inference (prefix of the scan order, for a quick
   check). Empty = full granule (slow on CPU).
 - `crop_to_scanned` — `true|false`; crop the inference GeoTIFFs to the scanned bounding box
   (pair with `max_tiles` so a capped run is not a mostly-NaN full-granule raster). Mutually
   exclusive with `edge_margin`.
-- `gate_thresh` — gate probability threshold for flagging tiles (default `0.65`).
+- `gate_thresh` — gate probability threshold for flagging tiles (default `0.5`).
 - `edge_margin` — overlap-stride rescoring to remove the tile-seam artifact (`0` = off, more
   compute). Mutually exclusive with `crop_to_scanned`.
 
@@ -141,10 +144,10 @@ export EARTHDATA_USERNAME=... EARTHDATA_PASSWORD=...
 conda run --live-stream -p /opt/conda/envs/rift_biomass2cog \
   python maap/biomass_e2e/biomass_e2e_dps.py \
     --item_id BIO_S1_SCS__1S_..._DY7A91 \
-    --amp_only false \
+    --products intensity \
     --max_tiles 100 --crop_to_scanned true \
     --out_dir output
-ls -la output/    # *_{HH,HV,VH,VV}_amp.tif (+ _phs.tif) + *_intensity.tif, gate_prob.tif, unet_prob.tif
+ls -la output/    # *_{HH,HV,VH,VV}_intensity.tif, gate_prob.tif, unet_prob.tif
 ```
 
 Test just the inference half against a directory of intensity COGs you already have:

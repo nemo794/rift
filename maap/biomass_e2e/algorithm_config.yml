@@ -35,11 +35,11 @@ inputs:
     type: string
     default: ""
 
-  - name: amp_only
-    label: amp_only
-    doc: "true|false. When true, skip the per-pol phase COGs and write amplitude only. Intensity COGs (needed for inference) are always derived from the amplitude COGs regardless."
+  - name: products
+    label: products
+    doc: "Comma-separated COG products: any of amp, phs, intensity. Must include intensity (the crevasse BIOMASS reader's input); add amp/phs to also keep those COGs."
     type: string
-    default: "false"
+    default: "intensity"
 
   - name: max_tiles
     label: max_tiles
