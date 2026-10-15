@@ -3,22 +3,22 @@
 
 End-to-end BIOMASS crevasse detection, chaining two conda envs behind one entrypoint:
 
-  1. **geocode** (env ``rift_biomass2cog``): resolve an ESA BIOMASS Level-1A SCS granule by
-     STAC Item ID, download its full product ``.zip`` on the worker with an ESA access
-     token, then run ``rift biomass2cog`` to geocode the range-doppler SLCs onto the
-     Antarctica master grid (EPSG:3031, 5x5 m, 512x512 chunks) via ISCE3 and write
-     per-polarization amplitude (and phase) COGs. All four pols (HH,HV,VH,VV) are always
-     geocoded — the BIOMASS U-Net is a 4-channel model, so the pols are hardcoded here, not
-     a job input.
-  2. **intensity** (same env): square each ``*_<POL>_amp.tif`` into a co-registered
-     ``*_<POL>_intensity.tif`` (``scripts/make_pwr_cogs.py``). The crevasse BIOMASS reader
-     requires the four ``*_<POL>_intensity.tif`` COGs as its inputs.
-  3. **inference** (env ``crevasse``): run ``crevasse-export-geotiff biomass`` on the
+  1. **geocode + intensity** (env ``rift_biomass2cog``): resolve an ESA BIOMASS Level-1A
+     SCS granule by STAC Item ID, download its full product ``.zip`` on the worker with an
+     ESA access token, then run ``rift biomass2cog`` to geocode the range-doppler SLCs onto
+     the Antarctica master grid (EPSG:3031, 5x5 m, 512x512 chunks) via ISCE3. The job's
+     ``products`` input selects the COGs written; it defaults to (and must include)
+     ``intensity``, so ``rift biomass2cog`` emits the per-polarization
+     ``*_<POL>_intensity.tif`` COGs (``amp**2``) in-process. All four pols (HH,HV,VH,VV) are
+     always geocoded — the BIOMASS U-Net is a 4-channel model, so the pols are hardcoded
+     here, not a job input. The crevasse BIOMASS reader requires the four
+     ``*_<POL>_intensity.tif`` COGs as its inputs.
+  2. **inference** (env ``crevasse``): run ``crevasse-export-geotiff biomass`` on the
      directory of intensity COGs to write ``gate_prob.tif`` + ``unet_prob.tif`` into the
      same ``output/``.
 
 This script runs *inside* the ``rift_biomass2cog`` env (see run.sh); it shells out to the
-``crevasse`` env for step 3 via ``conda run -n crevasse``.
+``crevasse`` env for inference via ``conda run -n crevasse``.
 
 Unlike the NISAR path (ASF S3 + Earthdata), BIOMASS data lives on ESA's MAAP
 infrastructure. Egress happens *inside* the algorithm (per MAAP guidance): we exchange
@@ -27,7 +27,7 @@ over authenticated HTTPS with ``requests``. The auth/token flow mirrors
 ``MAAP-Project/esa-biomass-gamma0``; the downloader does not (that reference uses
 ``obstore`` against static assets — the on-the-fly ``/data/zipper/`` zip needs ``requests``
 instead). This entrypoint extends ``maap/biomass2cog/biomass2cog_dps.py`` with the
-intensity + inference steps.
+inference step.
 
 Credentials (``ESA_MAAP_CLIENT_SECRET`` / ``ESA_OFFLINE_TOKEN``) and NASA Earthdata
 credentials (for the sardem DEM download) are read from the environment first (local
@@ -54,10 +54,6 @@ DEFAULT_POLS = "HH,HV,VH,VV"
 # Full-product zip asset on the ESA MAAP STAC (served from the /data/zipper/ endpoint).
 PRODUCT_ASSET_KEY = "product"
 
-# Path to scripts/make_pwr_cogs.py, relative to this file (rift/maap/biomass_e2e/).
-_HERE = os.path.dirname(os.path.abspath(__file__))
-MAKE_INTENSITY_SCRIPT = os.path.join(_HERE, "..", "..", "scripts", "make_pwr_cogs.py")
-
 
 # --------------------------------------------------------------------------------------
 # Argument parsing
@@ -69,12 +65,15 @@ def _normalize_blank(value: Optional[str]) -> str:
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="Fetch an ESA BIOMASS L1A granule, run rift biomass2cog, derive "
+        description="Fetch an ESA BIOMASS L1A granule, run rift biomass2cog to write "
                     "intensity COGs, then run the crevasse BIOMASS gate + U-Net model."
     )
     p.add_argument("--item_id", default="", help="BIOMASS L1A STAC Item ID.")
     p.add_argument("--collection", default=DEFAULT_COLLECTION)
-    p.add_argument("--amp_only", default="false", help="true|false.")
+    p.add_argument("--products", default="intensity",
+                   help="Comma-separated COG products (no brackets): any of amp, phs, "
+                        "intensity (e.g. intensity or amp,phs,intensity). Must include "
+                        "intensity (the crevasse BIOMASS reader's input).")
     # --- crevasse inference knobs ---
     p.add_argument("--max_tiles", default="",
                    help="Cap on candidate tiles for inference (prefix of scan order). "
@@ -102,12 +101,22 @@ def parse_args() -> argparse.Namespace:
         or "output",
     )
     args = p.parse_args()
-    for attr in ("item_id", "collection", "max_tiles", "out_dir"):
+    for attr in ("item_id", "collection", "products", "max_tiles", "out_dir"):
         setattr(args, attr, _normalize_blank(getattr(args, attr, "")))
     if not args.item_id:
         p.error("--item_id is required.")
     if not args.collection:
         args.collection = DEFAULT_COLLECTION
+    if not args.products:
+        args.products = "intensity"
+    # The crevasse BIOMASS reader globs *_<POL>_intensity.tif; without intensity the
+    # inference step has no input, so fail loudly up front rather than deep in crevasse.
+    products = {p.strip().lower() for p in args.products.split(",") if p.strip()}
+    if "intensity" not in products:
+        p.error(
+            f"--products must include 'intensity' for biomass_e2e (crevasse input); "
+            f"got {sorted(products)}."
+        )
     return args
 
 
@@ -324,11 +333,14 @@ def fetch_granule(item_id: str, collection: str, input_dir: str) -> str:
 # --------------------------------------------------------------------------------------
 # Steps
 # --------------------------------------------------------------------------------------
-def run_biomass2cog(granule: str, out_dir: str, amp_only: str) -> int:
-    """Step 1: geocode to amplitude (and phase) COGs, in this (rift_biomass2cog) env.
+def run_biomass2cog(granule: str, out_dir: str, products: str) -> int:
+    """Step 1: geocode to the requested COG products, in this (rift_biomass2cog) env.
 
     Grid is hardcoded to the shared 5x5 m master grid (CLI defaults); no --dem
-    (auto-downloaded via sardem from the granule footprint). Pols are always all four."""
+    (auto-downloaded via sardem from the granule footprint). Pols are always all four.
+    ``products`` must include ``intensity`` — the per-pol ``*_<POL>_intensity.tif`` COGs
+    are what the crevasse BIOMASS reader consumes (now produced in-process by
+    ``rift biomass2cog`` rather than a separate make_pwr_cogs step)."""
     cmd = [
         "rift",
         "biomass2cog",
@@ -338,19 +350,9 @@ def run_biomass2cog(granule: str, out_dir: str, amp_only: str) -> int:
         out_dir,
         "--pols",
         "[" + DEFAULT_POLS + "]",  # jsonargparse list syntax
+        "--products",
+        "[" + products.strip() + "]",
     ]
-    if str(amp_only).strip().lower() == "true":
-        cmd += ["--amp-only"]
-    print(f"RUNNING: {' '.join(cmd)}", flush=True)
-    return subprocess.run(cmd).returncode
-
-
-def make_intensity_cogs(out_dir: str) -> int:
-    """Step 2: derive per-pol ``*_<POL>_intensity.tif`` from the amplitude COGs.
-
-    Runs in this (rift_biomass2cog) env; the intensity COGs are what the crevasse BIOMASS
-    reader consumes. Written alongside the amplitude/phase COGs in ``out_dir``."""
-    cmd = [sys.executable, MAKE_INTENSITY_SCRIPT, out_dir, "--output-dir", out_dir]
     print(f"RUNNING: {' '.join(cmd)}", flush=True)
     return subprocess.run(cmd).returncode
 
@@ -432,14 +434,9 @@ def main() -> int:
     size_mb = os.path.getsize(granule) / (1 << 20)
     print(f"DOWNLOADED {granule} ({size_mb:.1f} MiB)", flush=True)
 
-    rc = run_biomass2cog(granule, args.out_dir, args.amp_only)
+    rc = run_biomass2cog(granule, args.out_dir, args.products)
     if rc != 0:
-        print(f"biomass2cog failed (rc={rc}); skipping intensity + inference.", flush=True)
-        return rc
-
-    rc = make_intensity_cogs(args.out_dir)
-    if rc != 0:
-        print(f"make_pwr_cogs failed (rc={rc}); skipping inference.", flush=True)
+        print(f"biomass2cog failed (rc={rc}); skipping inference.", flush=True)
         return rc
 
     print(f"INFERENCE_INPUT_DIR: {args.out_dir}", flush=True)

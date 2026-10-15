@@ -84,6 +84,64 @@ def test_config_records_resolved_params(monkeypatch):
         # NISAR always uses the shared 5×5 m master grid (no spacing options).
         assert cfg["x_spacing"] == 5 and cfg["y_spacing"] == 5
         assert cfg["threshold"] == 0.3
+        # The resolved config records the products selection (replacing the old amp_only).
+        assert cfg["products"] == ["amp", "phs"]
+        assert "amp_only" not in cfg
+
+
+# --------------------------------------------------------------------------------------
+# Product selection
+# --------------------------------------------------------------------------------------
+
+def test_normalize_products_default_and_dedup():
+    assert pipeline._normalize_products(None) == ["amp", "phs"]
+    # Case-insensitive, deduped, re-ordered to canonical amp→phs→intensity.
+    assert pipeline._normalize_products(["INTENSITY", "amp", "amp"]) == ["amp", "intensity"]
+
+
+def test_normalize_products_rejects_empty_and_unknown():
+    import pytest
+    with pytest.raises(ValueError):
+        pipeline._normalize_products([])
+    with pytest.raises(ValueError):
+        pipeline._normalize_products(["", "  "])
+    with pytest.raises(ValueError):
+        pipeline._normalize_products(["power"])  # typo must fail loudly
+
+
+def test_select_products_intensity_only_drops_amp():
+    """products=[intensity] derives the intensity COG and removes the amp COG."""
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        amp = d / "G_HH_amp.tif"
+        _make_amp_cog(amp)
+        kept = pipeline._select_products([amp], amp, ["intensity"])
+        names = sorted(p.name for p in kept)
+        assert names == ["G_HH_intensity.tif"]
+        assert (d / "G_HH_intensity.tif").exists()
+        assert not amp.exists()  # amp not requested → removed
+
+
+def test_select_products_amp_and_intensity_kept_in_order():
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        amp = d / "G_HH_amp.tif"
+        _make_amp_cog(amp)
+        kept = pipeline._select_products([amp], amp, ["amp", "intensity"])
+        assert [p.name for p in kept] == ["G_HH_amp.tif", "G_HH_intensity.tif"]
+        assert amp.exists()
+
+
+def test_e2e_guard_requires_inference_product(monkeypatch):
+    """Each e2e raises if its inference product is dropped from the selection."""
+    import pytest
+    monkeypatch.setattr(pipeline, "nisar_to_cogs", _stub_nisar_to_cogs)
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        # NISAR e2e needs amp; a phs-only selection is rejected before any work.
+        with pytest.raises(ValueError, match="amp"):
+            pipeline.run_nisar_end_to_end(Path("dummy.h5"), d, pols=["HH"],
+                                          products=["phs"])
 
 
 if __name__ == "__main__":

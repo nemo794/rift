@@ -37,10 +37,10 @@ inputs:
   pols:
     type: string?
     inputBinding: { prefix: --pols }
-  amp_only:
+  products:
     type: string
-    default: "false"
-    inputBinding: { prefix: --amp_only }
+    default: "amp"
+    inputBinding: { prefix: --products }
   max_tiles:
     type: string?
     inputBinding: { prefix: --max_tiles }

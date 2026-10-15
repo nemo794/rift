@@ -36,7 +36,9 @@ Inputs (all named):
 - `item_id` — ESA BIOMASS L1A SCS STAC Item ID (collection `BiomassLevel1a`), e.g.
   `BIO_S1_SCS__1S_20260922T230451_..._DY7A91`.
 - `pols` — comma-separated (default `HH,HV,VH,VV`).
-- `amp_only` — `true|false`; `true` skips phase COGs.
+- `products` — comma-separated COG products (no brackets), any of `amp`, `phs`, `intensity`
+  (default `amp,phs`); e.g. `amp,phs,intensity` for all three. Add `intensity` to also write
+  the per-pol `*_intensity.tif` (`amp**2`) COGs.
 
 The 5×5 m master grid and DEM auto-download (via sardem) are fixed (not job inputs).
 
@@ -78,7 +80,7 @@ export ESA_MAAP_CLIENT_SECRET=... ESA_OFFLINE_TOKEN=...
 # the worker will. This exercises the ESA fetch + rift biomass2cog end-to-end.
 python maap/biomass2cog/biomass2cog_dps.py \
     --item_id BIO_S1_SCS__1S_..._DY7A91 \
-    --pols "HH,HV,VH,VV" --amp_only false \
+    --pols "HH,HV,VH,VV" --products "amp,phs" \
     --out_dir output
 ls -la output/                                     # <granule>_<POL>_amp.tif (+ _phs.tif)
 gdalinfo output/**/*_amp.tif | grep -E "EPSG|Size" # expect EPSG:3031
@@ -86,7 +88,8 @@ gdalinfo output/**/*_amp.tif | grep -E "EPSG|Size" # expect EPSG:3031
 
 Or test just the science step against a granule you've already downloaded:
 ```bash
-rift biomass2cog --granule /path/to/BIO_..._SCS_....zip --output output/ --pols "[HH,HV,VH,VV]"
+rift biomass2cog --granule /path/to/BIO_..._SCS_....zip --output output/ \
+    --pols "[HH,HV,VH,VV]" --products "[amp,phs,intensity]"
 ```
 
 ## Stage 2 — register + run on DPS

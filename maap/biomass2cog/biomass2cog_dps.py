@@ -57,7 +57,9 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_POLS,
         help="Comma-separated polarizations (e.g. HH,HV,VH,VV).",
     )
-    p.add_argument("--amp_only", default="false", help="true|false.")
+    p.add_argument("--products", default="amp,phs",
+                   help="Comma-separated COG products (no brackets): any of amp, phs, "
+                        "intensity (e.g. amp,phs or amp,phs,intensity).")
     p.add_argument(
         "--out_dir",
         default=os.environ.get("USER_OUTPUT_DIR")
@@ -65,7 +67,7 @@ def parse_args() -> argparse.Namespace:
         or "output",
     )
     args = p.parse_args()
-    for attr in ("item_id", "collection", "pols", "out_dir"):
+    for attr in ("item_id", "collection", "pols", "products", "out_dir"):
         setattr(args, attr, _normalize_blank(getattr(args, attr, "")))
     if not args.item_id:
         p.error("--item_id is required.")
@@ -73,6 +75,8 @@ def parse_args() -> argparse.Namespace:
         args.collection = DEFAULT_COLLECTION
     if not args.pols:
         args.pols = DEFAULT_POLS
+    if not args.products:
+        args.products = "amp,phs"
     return args
 
 
@@ -317,9 +321,9 @@ def main() -> int:
         args.out_dir,
         "--pols",
         "[" + args.pols.strip() + "]",  # jsonargparse list syntax
+        "--products",
+        "[" + args.products.strip() + "]",
     ]
-    if str(args.amp_only).strip().lower() == "true":
-        cmd += ["--amp-only"]
 
     print(f"RUNNING: {' '.join(cmd)}", flush=True)
     return subprocess.run(cmd).returncode

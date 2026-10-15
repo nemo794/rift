@@ -66,11 +66,11 @@ inputs:
     type: string
     default: ""
 
-  - name: amp_only
-    label: amp_only
-    doc: "true|false. When true, skip the per-pol phase COGs and write amplitude only."
+  - name: products
+    label: products
+    doc: "Comma-separated COG products: any of amp, phs, intensity (e.g. amp or amp,phs,intensity). Must include amp (the crevasse NISAR input); add phs/intensity to also write those COGs."
     type: string
-    default: "false"
+    default: "amp"
 
   - name: max_tiles
     label: max_tiles

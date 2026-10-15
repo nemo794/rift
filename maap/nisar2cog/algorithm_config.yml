@@ -64,11 +64,11 @@ inputs:
     type: string
     default: ""
 
-  - name: amp_only
-    label: amp_only
-    doc: "true|false. When true, skip the per-pol phase COGs and write amplitude only."
+  - name: products
+    label: products
+    doc: "Comma-separated COG products: any of amp, phs, intensity (e.g. amp,phs or amp,phs,intensity)."
     type: string
-    default: "false"
+    default: "amp,phs"
 
 outputs:
   - name: out

@@ -47,14 +47,18 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--count", type=int, default=50)
     p.add_argument("--asf_s3_creds_url", default=DEFAULT_ASF_S3_CREDS_URL)
     p.add_argument("--pols", default="")
-    p.add_argument("--amp_only", default="false")
+    p.add_argument("--products", default="amp,phs",
+                   help="Comma-separated COG products (no brackets): any of amp, phs, "
+                        "intensity (e.g. amp,phs or amp,phs,intensity).")
     p.add_argument(
         "--out_dir",
         default=os.environ.get("USER_OUTPUT_DIR") or os.environ.get("OUTPUT_DIR") or "output",
     )
     args = p.parse_args()
-    for attr in ("s3_href", "https_href", "pols", "out_dir"):
+    for attr in ("s3_href", "https_href", "pols", "products", "out_dir"):
         setattr(args, attr, _normalize_blank(getattr(args, attr, "")))
+    if not args.products:
+        args.products = "amp,phs"
     return args
 
 
@@ -194,8 +198,7 @@ def main() -> int:
     pols = args.pols.strip()
     if pols:
         cmd += ["--pols", "[" + pols + "]"]           # jsonargparse list syntax
-    if str(args.amp_only).strip().lower() == "true":
-        cmd += ["--amp-only"]
+    cmd += ["--products", "[" + args.products.strip() + "]"]
 
     print(f"RUNNING: {' '.join(cmd)}", flush=True)
     return subprocess.run(cmd).returncode

@@ -21,10 +21,13 @@ always placed losslessly onto the 5×5 m master grid — no resampling, no spaci
 options. ``--keep-intermediates`` (e2e only, default off) keeps amplitude/phase COGs in the
 output directory instead of deleting them.
 
-COG products default to a per-polarization amplitude COG (``_<pol>_amp.tif``) plus a
-co-registered phase COG (``_<pol>_phs.tif``, radians -π..π), mirroring the source L1A
-abs/phase measurement layout. ``--amp-only`` writes amplitude only. Inference always runs
-on the amplitude COG.
+COG products are selected with ``--products`` as a **bracketed** list, any of ``amp``,
+``phs``, ``intensity`` — e.g. ``--products [amp,phs,intensity]`` for all three, or
+``--products [intensity]`` for one (brackets are required even for a single value; default
+``[amp,phs]``). Amplitude is ``_<pol>_amp.tif``, phase is ``_<pol>_phs.tif`` (radians -π..π,
+mirroring the source L1A abs/phase layout), and intensity is ``_<pol>_intensity.tif`` (linear
+power, ``amp**2``, derived from the amplitude COG). For the e2e commands, inference always
+runs on the amplitude COG, so ``amp`` must be in ``--products``.
 """
 
 from __future__ import annotations
@@ -52,9 +55,11 @@ def _build_parser() -> ArgumentParser:
     p.add_argument("--threshold", type=float, default=0.5, help="Inference amplitude threshold")
     p.add_argument("--pols", type=List[str], default=["HH"], help="Polarizations, e.g. [HH,HV]")
     p.add_argument("--keep-intermediates", action="store_true",
-                   help="Keep amplitude/phase COGs in output/ (default: delete)")
-    p.add_argument("--amp-only", action="store_true",
-                   help="Write amplitude only (default: also write a separate phase COG per pol)")
+                   help="Keep product COGs in output/ (default: delete)")
+    p.add_argument("--products", type=List[str], default=["amp", "phs"],
+                   help="COG products as a bracketed list, any of amp/phs/intensity — "
+                        "e.g. [amp,phs,intensity] or [intensity] (brackets required; "
+                        "default [amp,phs]). Must include amp (inference input).")
     sub.add_subcommand("biomass-e2e", p)
 
     # --- nisar-e2e --------------------------------------------------------------------
@@ -65,8 +70,10 @@ def _build_parser() -> ArgumentParser:
     p.add_argument("--pols", type=Optional[List[str]], default=None,
                    help="Polarizations (default: all freq-A)")
     p.add_argument("--keep-intermediates", action="store_true")
-    p.add_argument("--amp-only", action="store_true",
-                   help="Write amplitude only (default: also write a separate phase COG per pol)")
+    p.add_argument("--products", type=List[str], default=["amp", "phs"],
+                   help="COG products as a bracketed list, any of amp/phs/intensity — "
+                        "e.g. [amp,phs,intensity] or [intensity] (brackets required; "
+                        "default [amp,phs]). Must include amp (inference input).")
     sub.add_subcommand("nisar-e2e", p)
 
     # --- biomass2cog ------------------------------------------------------------------
@@ -79,8 +86,10 @@ def _build_parser() -> ArgumentParser:
     p.add_argument("--native", action="store_true")
     p.add_argument("--margin", type=float, default=5000.0)
     p.add_argument("--pols", type=List[str], default=["HH"])
-    p.add_argument("--amp-only", action="store_true",
-                   help="Write amplitude only (default: also write a separate phase COG per pol)")
+    p.add_argument("--products", type=List[str], default=["amp", "phs"],
+                   help="COG products as a bracketed list, any of amp/phs/intensity — "
+                        "e.g. [amp,phs,intensity] or [intensity] (brackets required; "
+                        "default [amp,phs])")
     sub.add_subcommand("biomass2cog", p)
 
     # --- nisar2cog --------------------------------------------------------------------
@@ -88,8 +97,10 @@ def _build_parser() -> ArgumentParser:
     p.add_argument("--gslc", type=Path, required=True)
     p.add_argument("--output", type=Path, required=True, help="Output directory")
     p.add_argument("--pols", type=Optional[List[str]], default=None)
-    p.add_argument("--amp-only", action="store_true",
-                   help="Write amplitude only (default: also write a separate phase COG per pol)")
+    p.add_argument("--products", type=List[str], default=["amp", "phs"],
+                   help="COG products as a bracketed list, any of amp/phs/intensity — "
+                        "e.g. [amp,phs,intensity] or [intensity] (brackets required; "
+                        "default [amp,phs])")
     sub.add_subcommand("nisar2cog", p)
 
     # --- biomass-infer / nisar-infer --------------------------------------------------
@@ -138,7 +149,7 @@ def _dispatch(argv: Optional[List[str]] = None) -> int:
             args.granule, args.output, dem=args.dem,
             x_spacing=args.x_spacing, y_spacing=args.y_spacing, native=args.native,
             margin=args.margin, threshold=args.threshold, pols=args.pols,
-            keep_intermediates=args.keep_intermediates, amp_only=args.amp_only,
+            keep_intermediates=args.keep_intermediates, products=args.products,
         )
         _report(result)
 
@@ -147,7 +158,7 @@ def _dispatch(argv: Optional[List[str]] = None) -> int:
         result = run_nisar_end_to_end(
             args.gslc, args.output,
             threshold=args.threshold, pols=args.pols,
-            keep_intermediates=args.keep_intermediates, amp_only=args.amp_only,
+            keep_intermediates=args.keep_intermediates, products=args.products,
         )
         _report(result)
 
@@ -161,13 +172,13 @@ def _dispatch(argv: Optional[List[str]] = None) -> int:
         outs = biomass_to_cogs(args.granule, dem_path, args.output, grid=grid,
                                pols=args.pols, margin=args.margin,
                                polarization_for_footprint=args.pols[0],
-                               amp_only=args.amp_only)
+                               products=args.products)
         _report_list(outs)
 
     elif cmd == "nisar2cog":
         from rift.pipeline import nisar_to_cogs
         outs = nisar_to_cogs(args.gslc, args.output, pols=args.pols,
-                             amp_only=args.amp_only)
+                             products=args.products)
         _report_list(outs)
 
     elif cmd in ("biomass-infer", "nisar-infer"):

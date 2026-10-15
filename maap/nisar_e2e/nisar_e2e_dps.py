@@ -46,7 +46,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--count", type=int, default=50)
     p.add_argument("--asf_s3_creds_url", default=DEFAULT_ASF_S3_CREDS_URL)
     p.add_argument("--pols", default="")
-    p.add_argument("--amp_only", default="false")
+    p.add_argument("--products", default="amp",
+                   help="Comma-separated COG products (no brackets): any of amp, phs, "
+                        "intensity (e.g. amp or amp,phs,intensity). Must include amp "
+                        "(the crevasse NISAR input).")
     p.add_argument("--max_tiles", default="",
                    help="Cap on candidate tiles for inference (prefix of scan order). "
                         "Empty = full swath.")
@@ -66,8 +69,18 @@ def parse_args() -> argparse.Namespace:
         default=os.environ.get("USER_OUTPUT_DIR") or os.environ.get("OUTPUT_DIR") or "output",
     )
     args = p.parse_args()
-    for attr in ("s3_href", "https_href", "pols", "max_tiles", "out_dir"):
+    for attr in ("s3_href", "https_href", "pols", "products", "max_tiles", "out_dir"):
         setattr(args, attr, _normalize_blank(getattr(args, attr, "")))
+    if not args.products:
+        args.products = "amp"
+    # crevasse NISAR inference runs on the HH *_amp.tif; without amp there is no input, so
+    # fail loudly up front rather than deep in _find_hh_amp / crevasse.
+    products = {p.strip().lower() for p in args.products.split(",") if p.strip()}
+    if "amp" not in products:
+        p.error(
+            f"--products must include 'amp' for nisar_e2e (crevasse input); "
+            f"got {sorted(products)}."
+        )
     return args
 
 
@@ -191,14 +204,16 @@ def fetch_granule(args: argparse.Namespace, input_dir: str) -> str:
 # --------------------------------------------------------------------------------------
 # Steps
 # --------------------------------------------------------------------------------------
-def run_nisar2cog(gslc: str, out_dir: str, pols: str, amp_only: str) -> int:
-    """Step 1: geocode to amplitude (and phase) COGs, in this (rift_nisar2cog) env."""
+def run_nisar2cog(gslc: str, out_dir: str, pols: str, products: str) -> int:
+    """Step 1: geocode to the requested COG products, in this (rift_nisar2cog) env.
+
+    ``products`` must include ``amp`` — crevasse NISAR inference consumes the HH
+    ``*_amp.tif``."""
     cmd = ["rift", "nisar2cog", "--gslc", gslc, "--output", out_dir]
     pols = pols.strip()
     if pols:
         cmd += ["--pols", "[" + pols + "]"]           # jsonargparse list syntax
-    if str(amp_only).strip().lower() == "true":
-        cmd += ["--amp-only"]
+    cmd += ["--products", "[" + products.strip() + "]"]
     print(f"RUNNING: {' '.join(cmd)}", flush=True)
     return subprocess.run(cmd).returncode
 
@@ -267,7 +282,7 @@ def main() -> int:
     size_mb = os.path.getsize(gslc) / (1 << 20)
     print(f"DOWNLOADED {gslc} ({size_mb:.1f} MiB)", flush=True)
 
-    rc = run_nisar2cog(gslc, args.out_dir, args.pols, args.amp_only)
+    rc = run_nisar2cog(gslc, args.out_dir, args.pols, args.products)
     if rc != 0:
         print(f"nisar2cog failed (rc={rc}); skipping inference.", flush=True)
         return rc

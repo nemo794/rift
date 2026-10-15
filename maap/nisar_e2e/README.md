@@ -65,7 +65,9 @@ Inputs (all named):
 - `short_name` (`NISAR_L2_GSLC_PROVISIONAL_V1`) / `granule_index` — CMR search fallback.
 - `asf_s3_creds_url` — ASF temporary-S3-credentials endpoint.
 - `pols` — comma-separated (`HH,HV`); empty = all freq-A pols.
-- `amp_only` — `true|false`; `true` skips phase COGs.
+- `products` — comma-separated COG products (no brackets), any of `amp`, `phs`, `intensity`
+  (default `amp`); e.g. `amp` or `amp,phs,intensity`. Must include `amp` (the crevasse input);
+  add `phs`/`intensity` to also keep those COGs. A selection omitting `amp` is rejected.
 - `max_tiles` — cap on candidate tiles for inference (prefix of the swath scan order, for a
   quick check). Empty = full swath (slow on CPU).
 - `crop_to_scanned` — `true|false`; crop the inference GeoTIFFs to the scanned bounding box
@@ -88,7 +90,7 @@ conda run --live-stream -p /opt/conda/envs/rift_nisar2cog \
   python maap/nisar_e2e/nisar_e2e_dps.py \
     --access_mode auto \
     --short_name NISAR_L2_GSLC_PROVISIONAL_V1 --granule_index 0 \
-    --pols "" --amp_only false \
+    --pols "" --products amp \
     --max_tiles 100 --crop_to_scanned true \
     --out_dir output
 ls -la output/                    # *_HH_amp.tif (+ *_phs.tif), gate_prob.tif, unet_prob.tif
